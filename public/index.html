@@ -325,6 +325,8 @@
             <div class="row"><span class="row-label">Version</span><span class="row-value" id="sVersion"></span></div>
             <div class="row"><span class="row-label" id="sUpdateText">Updates install automatically</span>
               <button type="button" class="btn small" id="sUpdateCheck">Check now</button></div>
+            <div class="row"><span class="row-label">Remove Miserecord from this computer</span>
+              <button type="button" class="btn small danger-text" id="sUninstall">Uninstall</button></div>
           </div>
         </div>
 
@@ -500,6 +502,19 @@
         <button type="button" class="btn primary" id="pickerShare" disabled>Share</button>
       </div>
     </footer>
+  </div>
+</div>
+
+<!-- ======================= First launch: start with Windows? ======================= -->
+<div id="autostartAsk" class="sheet-backdrop" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="autostartTitle">
+    <div class="orb mid" aria-hidden="true"></div>
+    <h2 id="autostartTitle">Start Miserecord with Windows?</h2>
+    <p class="hint">Friends can only call you while Miserecord is running. With this on, it starts quietly in the tray when you sign in to Windows. You can change it anytime in Settings.</p>
+    <div class="btn-row">
+      <button type="button" class="btn big" id="autostartNo">Not now</button>
+      <button type="button" class="btn primary big" id="autostartYes">Start with Windows</button>
+    </div>
   </div>
 </div>
 

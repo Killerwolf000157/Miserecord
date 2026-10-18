@@ -20,7 +20,8 @@ const path = require('path');
 const { pathToFileURL } = require('url');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
-const ICON = path.join(__dirname, '..', 'build', 'icon.png');
+// Windows picks the right size (16–256 px) from the .ico for taskbar, title bar and tray.
+const ICON = path.join(__dirname, '..', 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 const APP_ORIGIN = 'app://miserecord';
 const UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
 const START_HIDDEN = process.argv.includes('--hidden');
@@ -59,7 +60,7 @@ app.on('window-all-closed', () => app.quit());
 // ---------------------------------------------------------------- desktop preferences
 // Kept in a file because the main process needs them before the page loads.
 const PREFS_FILE = () => path.join(app.getPath('userData'), 'desktop-prefs.json');
-const prefs = { background: true, autostart: false, toldAboutTray: false };
+const prefs = { background: true, autostart: false, askedAutostart: false, toldAboutTray: false };
 
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(fs.readFileSync(PREFS_FILE(), 'utf8'))); } catch { /* first run */ }
@@ -111,13 +112,16 @@ function start() {
     background: prefs.background,
     autostart: prefs.autostart,
     canAutostart: app.isPackaged,
+    askedAutostart: prefs.askedAutostart,
     globalHotkeys: hotkeys.available,
   }));
   ipcMain.handle('set-desktop-pref', (_e, key, value) => {
     if (key === 'background') setBackground(value);
     if (key === 'autostart') setAutostart(value);
+    if (key === 'askedAutostart') { prefs.askedAutostart = !!value; savePrefs(); }
     return true;
   });
+  ipcMain.handle('uninstall', () => uninstall());
   ipcMain.on('incoming-call', (_e, name) => notifyIncoming(String(name || 'Your friend').slice(0, 32)));
   ipcMain.on('call-answered', () => {
     if (mainWindow) mainWindow.flashFrame(false);
@@ -186,10 +190,25 @@ function showWindow() {
   mainWindow.focus();
 }
 
+// ---------------------------------------------------------------- uninstall
+// Runs the installer's own uninstaller (the same one as in Windows Settings > Apps),
+// then quits so it can remove the files.
+function uninstall() {
+  if (!app.isPackaged) return { ok: false, reason: 'Uninstall works in the installed app.' };
+  const dir = path.dirname(process.execPath);
+  const uninstaller = fs.readdirSync(dir).find((f) => /^Uninstall .*\.exe$/i.test(f));
+  if (!uninstaller) return { ok: false, reason: "Couldn't find the uninstaller. Use Windows Settings > Apps instead." };
+  // Don't leave a "start with Windows" entry pointing at a removed app.
+  app.setLoginItemSettings({ openAtLogin: false, path: process.execPath, args: ['--hidden'] });
+  const { spawn } = require('child_process');
+  spawn(path.join(dir, uninstaller), [], { detached: true, stdio: 'ignore' }).unref();
+  setTimeout(() => { quitting = true; app.quit(); }, 300);
+  return { ok: true };
+}
+
 // ---------------------------------------------------------------- tray
 function createTray() {
-  const image = nativeImage.createFromPath(ICON).resize({ width: 16, height: 16, quality: 'best' });
-  tray = new Tray(image);
+  tray = new Tray(process.platform === 'win32' ? ICON : nativeImage.createFromPath(ICON).resize({ width: 16, height: 16, quality: 'best' }));
   tray.setToolTip('Miserecord');
   tray.on('click', showWindow);
   refreshTray();

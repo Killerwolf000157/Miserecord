@@ -1,7 +1,7 @@
 {
   "name": "miserecord",
   "productName": "Miserecord",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Private peer-to-peer calls, screen sharing and streaming with your friends.",
   "author": "Killerwolf000157",
   "license": "UNLICENSED",
@@ -39,11 +39,12 @@
       "electron/**",
       "public/**",
       "build/icon.png",
+      "build/icon.ico",
       "package.json"
     ],
     "win": {
       "target": "nsis",
-      "icon": "build/icon.png",
+      "icon": "build/icon.ico",
       "artifactName": "Miserecord-Setup-${version}.${ext}"
     },
     "nsis": {

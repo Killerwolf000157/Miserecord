@@ -90,6 +90,16 @@
     Log.info('app', 'desktop version', { version, packaged });
   });
   $('#sUpdateCheck').onclick = () => desk.checkForUpdates();
+  $('#sUninstall').onclick = async () => {
+    const msg = state.mode
+      ? 'Uninstall Miserecord? This ends your current call and closes the app. Your friends and settings stay on this computer in case you reinstall.'
+      : 'Uninstall Miserecord? The app closes and Windows removes it. Your friends and settings stay on this computer in case you reinstall.';
+    if (!confirm(msg)) return;
+    if (state.mode) leave();
+    Log.info('app', 'uninstall requested');
+    const res = await desk.uninstall();
+    if (!res.ok) toast(res.reason, 'err');
+  };
   $('#updateRestart').onclick = () => {
     // Don't cut off a call: ask first if one is running.
     if (isConnected() && !confirm('Restarting ends your current call. Restart now?')) return;

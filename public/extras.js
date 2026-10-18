@@ -295,6 +295,21 @@ function initExtras() {
       $('#sAutostart').disabled = !p.canAutostart;
       if (!p.canAutostart) $('#sBackgroundNote').textContent += ' Starting with Windows works in the installed app.';
       pushHotkeys();
+      // First launch of the installed app: ask once, off unless you choose it.
+      if (p.canAutostart && !p.askedAutostart && !p.autostart) {
+        Log.info('app', 'asking whether to start with Windows');
+        $('#autostartAsk').hidden = false;
+        const answer = (on) => {
+          $('#autostartAsk').hidden = true;
+          desk.setPref('askedAutostart', true);
+          if (on) desk.setPref('autostart', true);
+          $('#sAutostart').checked = on;
+          Log.info('app', on ? 'start with Windows: on' : 'start with Windows: not now');
+          if (on) toast('Miserecord will start with Windows');
+        };
+        $('#autostartYes').onclick = () => answer(true);
+        $('#autostartNo').onclick = () => answer(false);
+      }
     });
     $('#sBackground').onchange = () => desk.setPref('background', $('#sBackground').checked);
     $('#sAutostart').onchange = () => desk.setPref('autostart', $('#sAutostart').checked);

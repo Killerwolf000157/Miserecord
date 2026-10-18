@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('miserecordDesktop', {
     ipcRenderer.on('update-status', (_e, status) => callback(status));
   },
   checkForUpdates: () => ipcRenderer.send('check-for-updates'),
+  uninstall: () => ipcRenderer.invoke('uninstall'),
   installUpdate: () => ipcRenderer.send('install-update'),
 
   // Calls
