@@ -216,6 +216,11 @@
           <svg class="off" viewBox="0 0 24 24"><path d="M4 4l16 16M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 10.7 5M12 17.5V20"/></svg>
           <span class="sr">Mute</span>
         </button>
+        <button id="deafenBtn" class="ctl" title="Mute everyone else">
+          <svg class="on" viewBox="0 0 24 24"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.8"/><rect x="16.5" y="14" width="4.5" height="6.5" rx="1.8"/></svg>
+          <svg class="off" viewBox="0 0 24 24"><path d="M4 4l16 16M4 15v-3a8 8 0 0 1 2.3-5.7M9.3 4.5A8 8 0 0 1 20 12v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.8"/><path d="M16.5 16.5v2.2c0 1 .8 1.8 1.8 1.8h.9"/></svg>
+          <span class="sr">Mute everyone else</span>
+        </button>
         <button id="screenBtn" class="ctl" title="Share screen">
           <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="2.5"/><path d="M8.5 20h7M12 13V8M9.5 10.5L12 8l2.5 2.5"/></svg>
           <span class="sr">Share screen</span>
@@ -422,8 +427,9 @@
           <label class="row"><span class="row-label">Bitrate</span>
             <select id="sQuality">
               <option value="auto">Browser default, about 2.5 Mbps</option>
-              <option value="high">High, up to 8 Mbps</option>
-              <option value="veryhigh">Very high, up to 20 Mbps</option>
+              <option value="low">Low, up to 2.5 Mbps</option>
+              <option value="high">Medium, up to 8 Mbps</option>
+              <option value="veryhigh">High, up to 20 Mbps</option>
               <option value="max">Max, up to 50 Mbps</option>
             </select></label>
           <label class="row"><span class="row-label">When the connection is busy</span>
@@ -458,6 +464,9 @@
           <div class="row"><span class="row-label">Mute and unmute</span>
             <button type="button" class="keycap" id="sMuteKey" data-binding="muteKey"></button>
             <button type="button" class="icon-btn key-clear" data-clear="muteKey" title="Remove shortcut" aria-label="Remove mute shortcut"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+          <div class="row"><span class="row-label">Mute everyone else</span>
+            <button type="button" class="keycap" id="sDeafenKey" data-binding="deafenKey"></button>
+            <button type="button" class="icon-btn key-clear" data-clear="deafenKey" title="Remove shortcut" aria-label="Remove shortcut"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
           <div class="row"><span class="row-label">Leave call</span>
             <button type="button" class="keycap" id="sLeaveKey" data-binding="leaveKey"></button>
             <button type="button" class="icon-btn key-clear" data-clear="leaveKey" title="Remove shortcut" aria-label="Remove leave shortcut"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
@@ -506,14 +515,37 @@
 </div>
 
 <!-- ======================= First launch: start with Windows? ======================= -->
-<div id="autostartAsk" class="sheet-backdrop" hidden>
-  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="autostartTitle">
+<div id="setup" class="sheet-backdrop" hidden>
+  <div class="sheet setup" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
     <div class="orb mid" aria-hidden="true"></div>
-    <h2 id="autostartTitle">Start Miserecord with Windows?</h2>
-    <p class="hint">Friends can only call you while Miserecord is running. With this on, it starts quietly in the tray when you sign in to Windows. You can change it anytime in Settings.</p>
+    <h2 id="setupTitle">Welcome to Miserecord</h2>
+    <p class="hint">Choose how you'll talk and listen. You can change all of this later in Settings.</p>
+    <div class="group setup-group">
+      <label class="row"><span class="row-label">Microphone</span><select id="setupMic"></select></label>
+      <div class="row"><span class="row-label">Level</span><div class="meter"><i id="setupLevel"></i></div></div>
+      <label class="row"><span class="row-label">Speaker</span><select id="setupSpeaker"></select></label>
+      <div class="row"><span class="row-label">Test sound</span><button type="button" class="btn small" id="setupTest">Play</button></div>
+    </div>
+    <div class="group setup-group">
+      <label class="row"><span class="row-label">Start with Windows</span><input type="checkbox" class="switch" id="setupAutostart"></label>
+    </div>
+    <p class="hint">Friends can only call you while Miserecord is running. With this on, it starts quietly in the tray when you sign in.</p>
+    <button type="button" class="btn primary big" id="setupDone">Done</button>
+  </div>
+</div>
+
+<!-- ======================= Uninstall (desktop app) ======================= -->
+<div id="uninstallSheet" class="sheet-backdrop" hidden>
+  <div class="sheet setup" role="alertdialog" aria-modal="true" aria-labelledby="uninstallTitle">
+    <h2 id="uninstallTitle">Uninstall Miserecord?</h2>
+    <p class="hint" id="uninstallCallNote" hidden>This ends your current call.</p>
+    <div class="group setup-group">
+      <label class="row"><span class="row-label">Also delete my settings, friends and saved data</span><input type="checkbox" class="switch" id="uninstallDelete"></label>
+    </div>
+    <p class="hint" id="uninstallDataNote"></p>
     <div class="btn-row">
-      <button type="button" class="btn big" id="autostartNo">Not now</button>
-      <button type="button" class="btn primary big" id="autostartYes">Start with Windows</button>
+      <button type="button" class="btn big" id="uninstallCancel">Cancel</button>
+      <button type="button" class="btn big decline" id="uninstallGo">Uninstall</button>
     </div>
   </div>
 </div>

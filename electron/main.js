@@ -60,7 +60,7 @@ app.on('window-all-closed', () => app.quit());
 // ---------------------------------------------------------------- desktop preferences
 // Kept in a file because the main process needs them before the page loads.
 const PREFS_FILE = () => path.join(app.getPath('userData'), 'desktop-prefs.json');
-const prefs = { background: true, autostart: false, askedAutostart: false, toldAboutTray: false };
+const prefs = { background: true, autostart: false, askedAutostart: false, setupDone: false, toldAboutTray: false };
 
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(fs.readFileSync(PREFS_FILE(), 'utf8'))); } catch { /* first run */ }
@@ -116,15 +116,17 @@ function start() {
     autostart: prefs.autostart,
     canAutostart: app.isPackaged,
     askedAutostart: prefs.askedAutostart,
+    setupDone: prefs.setupDone,
     globalHotkeys: hotkeys.available,
   }));
   ipcMain.handle('set-desktop-pref', (_e, key, value) => {
     if (key === 'background') setBackground(value);
     if (key === 'autostart') setAutostart(value);
     if (key === 'askedAutostart') { prefs.askedAutostart = !!value; savePrefs(); }
+    if (key === 'setupDone') { prefs.setupDone = !!value; savePrefs(); }
     return true;
   });
-  ipcMain.handle('uninstall', () => uninstall());
+  ipcMain.handle('uninstall', (_e, opts) => uninstall(!!(opts && opts.deleteData)));
   ipcMain.on('incoming-call', (_e, name) => notifyIncoming(String(name || 'Your friend').slice(0, 32)));
   ipcMain.on('call-answered', () => {
     if (mainWindow) mainWindow.flashFrame(false);
@@ -195,8 +197,10 @@ function showWindow() {
 
 // ---------------------------------------------------------------- uninstall
 // Runs the installer's own uninstaller (the same one as in Windows Settings > Apps),
-// then quits so it can remove the files.
-function uninstall() {
+// then quits so it can remove the files. With deleteData, your friends, identity
+// key, settings and logs are erased too: right away from the app's storage, and
+// the leftover folder once the app has closed.
+async function uninstall(deleteData) {
   if (!app.isPackaged) return { ok: false, reason: 'Uninstall works in the installed app.' };
   const dir = path.dirname(process.execPath);
   const uninstaller = fs.readdirSync(dir).find((f) => /^Uninstall .*\.exe$/i.test(f));
@@ -204,6 +208,16 @@ function uninstall() {
   // Don't leave a "start with Windows" entry pointing at a removed app.
   app.setLoginItemSettings({ openAtLogin: false, path: process.execPath, args: ['--hidden'] });
   const { spawn } = require('child_process');
+  if (deleteData) {
+    await session.defaultSession.clearStorageData();
+    await session.defaultSession.clearCache();
+    try { fs.unlinkSync(PREFS_FILE()); } catch { /* already gone */ }
+    // Only ever remove the app's own data folder.
+    const dataDir = app.getPath('userData');
+    if (/[\\/]Miserecord$/i.test(dataDir)) {
+      spawn('cmd.exe', ['/d', '/c', `ping -n 4 127.0.0.1 >nul & rmdir /s /q "${dataDir}"`], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+    }
+  }
   spawn(path.join(dir, uninstaller), [], { detached: true, stdio: 'ignore' }).unref();
   setTimeout(() => { quitting = true; app.quit(); }, 300);
   return { ok: true };

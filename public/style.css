@@ -785,3 +785,35 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
 .stage.has-tiles .people.many .avatar-wrap { width: 40px; height: 40px; }
 .stage.has-tiles .people.many .avatar { font-size: 17px; }
 .stage.has-tiles .kick { display: none; }
+
+/* ---------- first-launch setup ---------- */
+.sheet.setup { width: min(100%, 440px); gap: 14px; }
+.setup-group { width: 100%; text-align: left; }
+.setup-group .row select { max-width: 60%; }
+
+/* ---------- quick stream quality ---------- */
+.quality-pick { grid-template-columns: repeat(3, auto); }
+.quality-pick button { height: 26px; padding: 0 10px; font-size: 12px; }
+.stage-wrap.focus .tile-bar .quality-pick { display: grid; }
+
+/* ---------- very narrow windows (phones, a squeezed window) ---------- */
+.top-right > .chip { flex: 0 1 auto; min-width: 0; }
+@media (max-width: 520px) {
+  .topbar { padding: 0 8px 0 14px; gap: 8px; }
+  .top-right { gap: 6px; }
+  .chip-key, .status #statusText { display: none; }
+  #lobbyCodeChip { max-width: 96px; }
+  .layout { padding: 0 6px 6px; }
+  .stage { padding: 16px 10px 100px; }
+  .person, .people.many .person { width: 104px; }
+  .avatar-wrap, .people.many .avatar-wrap { width: 76px; height: 76px; }
+  .avatar, .people.many .avatar { font-size: 30px; }
+  .link { width: 36px; height: 76px; margin: 0 -18px; }
+  .dock { gap: 5px; padding: 6px; bottom: 12px; max-width: calc(100% - 16px); }
+  .ctl { width: 40px; height: 40px; }
+  .ctl svg { width: 19px; height: 19px; }
+  .ctl.danger { width: 48px; }
+  .dock-sep { display: none; }
+  .tile-bar { flex-wrap: wrap; }
+  .tile-vol .slider { flex-basis: 80px; }
+}

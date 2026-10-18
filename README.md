@@ -14,6 +14,8 @@ Private calls with your friends, 1:1 or in groups of up to 8, with no server to 
   stats of what's actually being sent and received
 - **Push to talk and shortcuts** (mute, leave), with side mouse buttons supported. In the desktop app they work even while a game is in front
 - **Separate volume** for your friend's voice and for streams
+- **Mute everyone else** next to Mute: silences every voice and stream you receive
+- **Quick quality switch** (Low / Medium / High) on your own screen share or stream
 - **Optional soft ringtone** for incoming calls, off by default
 - Light and dark mode
 
@@ -36,6 +38,8 @@ The desktop app adds:
   option to start hidden with Windows (Settings → General)
 - push to talk and shortcuts that work everywhere, even in games
 - a quiet notification when a friend calls while the window is hidden
+- a first-launch setup to pick your microphone and speaker
+- Uninstall in Settings, with an option to also delete your friends, settings and logs
 
 ### Without installing
 

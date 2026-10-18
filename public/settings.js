@@ -28,7 +28,7 @@ const SETTINGS_VERSION = 2;
 const OLD_DEFAULTS = { voice: 'high', shareRes: 'native', shareFps: '30', videoQuality: 'high' };
 
 const VOICE_BITRATE = { standard: 32000, high: 64000, veryhigh: 128000, hifi: 256000 };
-const VIDEO_BITRATE = { auto: null, high: 8e6, veryhigh: 20e6, max: 50e6 };
+const VIDEO_BITRATE = { auto: null, low: 2.5e6, high: 8e6, veryhigh: 20e6, max: 50e6 };
 const SHARE_SIZE = { native: null, 2160: [3840, 2160], 1440: [2560, 1440], 1080: [1920, 1080], 720: [1280, 720] };
 const CODEC_NAMES = { 'video/AV1': 'AV1, best quality', 'video/VP9': 'VP9', 'video/H264': 'H.264, uses less power', 'video/VP8': 'VP8, most compatible' };
 

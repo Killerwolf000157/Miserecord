@@ -979,6 +979,7 @@ function leave() {
   if (state.mic) state.mic.getTracks().forEach((t) => t.stop());
   state.mic = null;
   state.muted = false;
+  resetDeafen();
   $('#micBtn').classList.remove('muted');
   label($('#micBtn'), 'Mute');
   state.unread = 0;
@@ -1410,6 +1411,7 @@ function addFileCard(author, name, size, mine) {
 // ===================================================================
 function initControls() {
   $('#micBtn').onclick = toggleMute;
+  $('#deafenBtn').onclick = toggleDeafen;
   $('#screenBtn').onclick = toggleScreen;
   $('#mediaBtn').onclick = () => (state.media ? stopLocal('media') : $('#mediaFile').click());
   $('#mediaFile').onchange = (e) => {
@@ -1448,6 +1450,7 @@ async function toggleScreen() {
   tile.video.muted = true;
   tile.video.srcObject = stream;
   state.screen.tile = tile.el;
+  addQualityPicker(tile.el);
   publish('screen');
   $('#screenBtn').classList.add('active');
   label($('#screenBtn'), 'Stop sharing');
@@ -1477,6 +1480,7 @@ async function streamFile(file) {
   // stream for everyone and swap in freshly captured tracks on every play.
   const stream = new MediaStream();
   state.media = { stream, senders: new Map(), label: file.name, el, url, tile: tile.el };
+  addQualityPicker(tile.el);
   if (/^audio\//.test(file.type)) tile.el.classList.add('audio-only');
   const useTrack = (track) => {
     const media = state.media;
@@ -1572,6 +1576,7 @@ function renderRemoteStream(peer, id) {
       entry.audio.srcObject = stream;
       applySpeaker(entry.audio);
       entry.audio.volume = voiceVolumeFor(peer);
+      entry.audio.muted = !!state.deafened;
       entry.audio.play().catch(() => toast('Click anywhere to enable call audio.'));
       refreshPeerMeter(peer);
     }
@@ -1590,6 +1595,7 @@ function renderRemoteStream(peer, id) {
     tile.video.srcObject = stream;
     applySpeaker(tile.video);
     addTileVolume(tile);
+    tile.video.muted = !!state.deafened;
     tile.video.play().catch(() => {});
     entry.tile = tile;
   }

@@ -90,14 +90,25 @@
     Log.info('app', 'desktop version', { version, packaged });
   });
   $('#sUpdateCheck').onclick = () => desk.checkForUpdates();
-  $('#sUninstall').onclick = async () => {
-    const msg = state.mode
-      ? 'Uninstall Miserecord? This ends your current call and closes the app. Your friends and settings stay on this computer in case you reinstall.'
-      : 'Uninstall Miserecord? The app closes and Windows removes it. Your friends and settings stay on this computer in case you reinstall.';
-    if (!confirm(msg)) return;
+  $('#sUninstall').onclick = () => {
+    $('#uninstallDelete').checked = false;
+    $('#uninstallCallNote').hidden = !state.mode;
+    syncUninstallNote();
+    $('#uninstallSheet').hidden = false;
+  };
+  const syncUninstallNote = () => {
+    $('#uninstallDataNote').textContent = $('#uninstallDelete').checked
+      ? 'Your saved friends, settings and logs will be erased. To call your friends again, you would swap codes again.'
+      : 'Your friends and settings stay on this computer, so they come back if you reinstall.';
+  };
+  $('#uninstallDelete').onchange = syncUninstallNote;
+  $('#uninstallCancel').onclick = () => { $('#uninstallSheet').hidden = true; };
+  $('#uninstallGo').onclick = async () => {
+    const deleteData = $('#uninstallDelete').checked;
+    $('#uninstallSheet').hidden = true;
     if (state.mode) leave();
-    Log.info('app', 'uninstall requested');
-    const res = await desk.uninstall();
+    Log.info('app', 'uninstall requested', { deleteData });
+    const res = await desk.uninstall(deleteData);
     if (!res.ok) toast(res.reason, 'err');
   };
   $('#updateRestart').onclick = () => {

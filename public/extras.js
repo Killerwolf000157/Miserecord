@@ -11,6 +11,7 @@ Object.assign(SETTINGS_DEFAULTS, {
   pttKey: null,
   muteKey: null,
   leaveKey: null,
+  deafenKey: null,
 });
 for (const [k, v] of Object.entries(SETTINGS_DEFAULTS)) if (!(k in settings)) settings[k] = v;
 
@@ -19,8 +20,14 @@ for (const [k, v] of Object.entries(SETTINGS_DEFAULTS)) if (!(k in settings)) se
 function applyVolumes() {
   for (const peer of state.peers.values()) {
     for (const entry of peer.remote.values()) {
-      if (entry.audio) entry.audio.volume = voiceVolumeFor(peer);
-      if (entry.tile) entry.tile.video.volume = settings.streamVolume / 100;
+      if (entry.audio) {
+        entry.audio.volume = voiceVolumeFor(peer);
+        entry.audio.muted = !!state.deafened;
+      }
+      if (entry.tile) {
+        entry.tile.video.volume = settings.streamVolume / 100;
+        entry.tile.video.muted = !!state.deafened;
+      }
     }
   }
   for (const s of document.querySelectorAll('.tile.remote .tile-vol .slider')) syncSlider(s, settings.streamVolume);
@@ -117,6 +124,73 @@ function applyMicEnabled() {
   else label(btn, state.muted ? 'Unmute' : 'Mute');
 }
 
+// ------------------------------------------------------------------ mute everyone else
+// Silences every voice and stream you receive; your own mic is unaffected.
+function toggleDeafen() {
+  state.deafened = !state.deafened;
+  const btn = $('#deafenBtn');
+  btn.classList.toggle('muted', state.deafened);
+  label(btn, state.deafened ? 'Hear everyone again' : 'Mute everyone else');
+  applyVolumes();
+  Log.info('media', state.deafened ? 'muted everyone else' : 'unmuted everyone else');
+}
+
+function resetDeafen() {
+  if (state.deafened) toggleDeafen();
+}
+
+// ------------------------------------------------------------------ quick stream quality
+// One switch on your own stream changes video and audio together. Settings > Video
+// keeps the fine-grained options; a mix that matches no preset shows none selected.
+const QUALITY_PRESETS = {
+  low: { shareRes: '720', shareFps: '30', videoQuality: 'low', streamAudio: '128' },
+  medium: { shareRes: '1080', shareFps: '60', videoQuality: 'high', streamAudio: '256' },
+  high: { shareRes: '1440', shareFps: '60', videoQuality: 'veryhigh', streamAudio: '256' },
+};
+const QUALITY_HINTS = {
+  low: '720p, 30 fps, up to 2.5 Mbps',
+  medium: '1080p, 60 fps, up to 8 Mbps',
+  high: '1440p, 60 fps, up to 20 Mbps',
+};
+
+function currentPreset() {
+  return Object.keys(QUALITY_PRESETS).find((name) =>
+    Object.entries(QUALITY_PRESETS[name]).every(([k, v]) => settings[k] === v)) || null;
+}
+
+function addQualityPicker(tileEl) {
+  const pick = document.createElement('div');
+  pick.className = 'seg mini quality-pick';
+  pick.setAttribute('role', 'group');
+  pick.setAttribute('aria-label', 'Stream quality');
+  for (const [name, text] of [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.preset = name;
+    b.textContent = text;
+    b.title = QUALITY_HINTS[name];
+    b.onclick = () => applyQualityPreset(name);
+    pick.append(b);
+  }
+  tileEl.querySelector('.actions').prepend(pick);
+  syncQualityPickers();
+}
+
+function applyQualityPreset(name) {
+  Log.info('media', `stream quality ${name}`);
+  for (const [k, v] of Object.entries(QUALITY_PRESETS[name])) {
+    if (settings[k] !== v) setSetting(k, v);
+  }
+  syncQualityPickers();
+}
+
+function syncQualityPickers() {
+  const current = currentPreset();
+  for (const b of document.querySelectorAll('.quality-pick button')) {
+    b.classList.toggle('active', b.dataset.preset === current);
+  }
+}
+
 function setPtt(down) {
   clearTimeout(state.pttRelease);
   if (down) {
@@ -133,6 +207,7 @@ function onHotkey({ name, down }) {
   if (!down) return;
   if (name === 'mute' && state.mic) toggleMute();
   if (name === 'leave' && state.mode) leave();
+  if (name === 'deafen' && state.mode) toggleDeafen();
 }
 
 function keyLabel(b) {
@@ -167,6 +242,7 @@ function pushHotkeys() {
       ptt: settings.ptt ? settings.pttKey : null,
       mute: settings.muteKey,
       leave: settings.leaveKey,
+      deafen: settings.deafenKey,
     });
   }
   applyMicEnabled();
@@ -269,7 +345,7 @@ function initExtras() {
       return;
     }
     if (!down || e.repeat) return;
-    for (const name of ['mute', 'leave']) {
+    for (const name of ['mute', 'deafen', 'leave']) {
       if (matches(settings[`${name}Key`], e, false)) {
         if (typing(e) && !settings[`${name}Key`].ctrl && !settings[`${name}Key`].alt && !settings[`${name}Key`].meta) return;
         e.preventDefault();
@@ -295,21 +371,9 @@ function initExtras() {
       $('#sAutostart').disabled = !p.canAutostart;
       if (!p.canAutostart) $('#sBackgroundNote').textContent += ' Starting with Windows works in the installed app.';
       pushHotkeys();
-      // First launch of the installed app: ask once, off unless you choose it.
-      if (p.canAutostart && !p.askedAutostart && !p.autostart) {
-        Log.info('app', 'asking whether to start with Windows');
-        $('#autostartAsk').hidden = false;
-        const answer = (on) => {
-          $('#autostartAsk').hidden = true;
-          desk.setPref('askedAutostart', true);
-          if (on) desk.setPref('autostart', true);
-          $('#sAutostart').checked = on;
-          Log.info('app', on ? 'start with Windows: on' : 'start with Windows: not now');
-          if (on) toast('Miserecord will start with Windows');
-        };
-        $('#autostartYes').onclick = () => answer(true);
-        $('#autostartNo').onclick = () => answer(false);
-      }
+      // First launch of the installed app: pick microphone and speaker, and
+      // opt in to starting with Windows (off unless you choose it).
+      if (p.canAutostart && !p.setupDone) showSetup(desk, p);
     });
     $('#sBackground').onchange = () => desk.setPref('background', $('#sBackground').checked);
     $('#sAutostart').onchange = () => desk.setPref('autostart', $('#sAutostart').checked);
@@ -329,4 +393,78 @@ function syncExtras() {
   $('#sPtt').checked = settings.ptt;
   capturing = null;
   renderKeycaps();
+}
+
+// ------------------------------------------------------------------ first-launch setup (desktop app)
+async function showSetup(desk, p) {
+  Log.info('app', 'showing first-launch setup');
+  $('#setupAutostart').checked = !!p.autostart;
+  $('#setup').hidden = false;
+  let stream = null;
+  let ctx = null;
+
+  const fill = async () => {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const put = (select, kind, current, fallback) => {
+      select.innerHTML = '';
+      select.append(new Option('System default', ''));
+      let n = 0;
+      for (const d of devices.filter((x) => x.kind === kind && x.deviceId && !['default', 'communications'].includes(x.deviceId))) {
+        select.append(new Option(d.label || `${fallback} ${++n}`, d.deviceId));
+      }
+      select.value = [...select.options].some((o) => o.value === current) ? current : '';
+    };
+    put($('#setupMic'), 'audioinput', settings.micId, 'Microphone');
+    put($('#setupSpeaker'), 'audiooutput', settings.speakerId, 'Speaker');
+  };
+
+  // Open the chosen mic so its level shows and device names become visible.
+  const listen = async () => {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    if (ctx) ctx.close();
+    stream = null;
+    ctx = null;
+    try {
+      stream = await getMic();
+    } catch (err) {
+      Log.warn('media', 'setup could not open the microphone', err);
+      return;
+    }
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    const data = new Uint8Array(analyser.fftSize);
+    const mine = ctx;
+    const tick = () => {
+      if (ctx !== mine || $('#setup').hidden) return;
+      analyser.getByteTimeDomainData(data);
+      let sum = 0;
+      for (const v of data) sum += (v - 128) ** 2;
+      $('#setupLevel').style.width = `${Math.min(100, (Math.sqrt(sum / data.length) / 128) * 600).toFixed(0)}%`;
+      requestAnimationFrame(tick);
+    };
+    tick();
+  };
+
+  await listen();
+  await fill();
+  $('#setupMic').onchange = async () => { settings.micId = $('#setupMic').value; await listen(); };
+  $('#setupSpeaker').onchange = () => { settings.speakerId = $('#setupSpeaker').value; };
+  $('#setupSpeaker').disabled = typeof HTMLMediaElement.prototype.setSinkId !== 'function';
+  // Plays only when you press it, at a soft level, on the speaker you picked.
+  $('#setupTest').onclick = () => Ringtone.playOnce(0.3);
+  $('#setupDone').onclick = () => {
+    setSetting('micId', $('#setupMic').value);
+    setSetting('speakerId', $('#setupSpeaker').value);
+    const autostart = $('#setupAutostart').checked;
+    desk.setPref('autostart', autostart);
+    desk.setPref('askedAutostart', true);
+    desk.setPref('setupDone', true);
+    $('#sAutostart').checked = autostart;
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    if (ctx) ctx.close();
+    $('#setup').hidden = true;
+    Log.info('app', 'setup done', { mic: settings.micId ? 'chosen' : 'default', speaker: settings.speakerId ? 'chosen' : 'default', autostart });
+  };
 }
