@@ -46,6 +46,14 @@ let mainWindow = null;
 let tray = null;
 let quitting = false;
 
+// The development version (npm start) keeps its own data and its own
+// single-instance lock, so it runs next to the installed app instead of just
+// bringing that one to the front, and the two never share friends or settings.
+if (!app.isPackaged) {
+  app.setName('Miserecord Dev');
+  app.setPath('userData', path.join(app.getPath('appData'), 'Miserecord Dev'));
+}
+
 // One window only: opening the app again brings back the running one.
 if (!app.requestSingleInstanceLock()) {
   app.quit();

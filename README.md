@@ -128,6 +128,8 @@ npm install
 npm start
 ```
 
+`npm start` runs the version you are working on. It keeps its own data (%APPDATA%Miserecord Dev) and runs next to the installed app, so you can even call between the two.
+
 `npm run dist` builds the installer into `dist/`. To publish an update, bump the version and push
 the tag; the GitHub Actions workflow builds the installer and creates the release:
 
