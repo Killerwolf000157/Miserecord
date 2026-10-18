@@ -8,6 +8,19 @@
   document.documentElement.classList.add('desktop');
   Log.info('app', 'running as desktop app');
 
+  // ---------------------------------------------------------------- window buttons
+  // Minimize, maximize and close follow the app's light or dark theme.
+  if (desk.ownTitleBar) {
+    const dark = matchMedia('(prefers-color-scheme: dark)');
+    const sync = () => {
+      const t = document.documentElement.dataset.theme;
+      desk.setTitleBarTheme(t ? t === 'dark' : dark.matches);
+    };
+    sync();
+    dark.addEventListener('change', sync);
+    new MutationObserver(sync).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+
   // ---------------------------------------------------------------- screen picker
   let request = null;
   let selected = null;
@@ -17,16 +30,47 @@
     request = req;
     selected = null;
     kind = 'screen';
-    Log.info('media', 'screen picker opened', { screens: req.sources.filter((s) => s.kind === 'screen').length, windows: req.sources.filter((s) => s.kind === 'window').length });
     $('#pickerAudioRow').hidden = !req.canShareAudio;
     renderPicker();
     $('#picker').hidden = false;
+  });
+
+  desk.onPickSources((update) => {
+    if (!request || request.id !== update.id) return;
+    const first = !request.sources;
+    request.sources = update.sources;
+    if (update.failed) {
+      toast("Couldn't list your screens and windows.", 'err');
+      request = null;
+      $('#picker').hidden = true;
+      state.pickerCancelled = true;
+      return;
+    }
+    if (first) {
+      Log.info('media', 'screen picker opened', { screens: update.sources.filter((s) => s.kind === 'screen').length, windows: update.sources.filter((s) => s.kind === 'window').length });
+      // With one screen there's nothing to choose: it's ready to share.
+      const screens = update.sources.filter((s) => s.kind === 'screen');
+      if (screens.length === 1 && !selected) selected = screens[0].id;
+    }
+    if (selected && !request.sources.some((s) => s.id === selected)) selected = null;
+    renderPicker();
   });
 
   function renderPicker() {
     for (const tab of document.querySelectorAll('#pickerTabs button')) tab.classList.toggle('active', tab.dataset.kind === kind);
     const grid = $('#pickerGrid');
     grid.textContent = '';
+    if (!request.sources) {
+      // Placeholders until Windows has listed the screens and windows.
+      for (let i = 0; i < (kind === 'screen' ? 1 : 4); i++) {
+        const ph = document.createElement('div');
+        ph.className = 'source loading';
+        ph.innerHTML = '<div class="thumb"></div><div class="src-name"><span></span></div>';
+        grid.append(ph);
+      }
+      $('#pickerShare').disabled = true;
+      return;
+    }
     const list = request.sources.filter((s) => s.kind === kind);
     if (!list.length) {
       const p = document.createElement('p');
@@ -42,6 +86,7 @@
       thumb.className = 'thumb';
       thumb.alt = '';
       if (s.thumbnail) thumb.src = s.thumbnail;
+      else thumb.classList.add('pending');
       const name = document.createElement('div');
       name.className = 'src-name';
       if (s.icon) {
@@ -52,6 +97,7 @@
       }
       const label = document.createElement('span');
       label.textContent = s.kind === 'screen' && list.length === 1 ? 'Entire screen' : s.name;
+      if (label.textContent === s.name) label.setAttribute('translate', 'no');
       name.append(label);
       btn.append(thumb, name);
       btn.onclick = () => { selected = s.id; renderPicker(); };
@@ -115,7 +161,7 @@
   };
   $('#updateRestart').onclick = () => {
     // Don't cut off a call: ask first if one is running.
-    if (isConnected() && !confirm('Restarting ends your current call. Restart now?')) return;
+    if (isConnected() && !confirm(I18n.t('Restarting ends your current call. Restart now?'))) return;
     desk.installUpdate();
   };
 

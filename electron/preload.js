@@ -7,9 +7,18 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('miserecordDesktop', {
   info: () => ipcRenderer.invoke('app-info'),
 
+  // The window buttons are drawn over the page's own top bar.
+  ownTitleBar: process.platform === 'win32', // same rule as OWN_TITLE_BAR in main.js
+  setTitleBarTheme: (dark) => ipcRenderer.send('title-bar-theme', !!dark),
+  setLanguage: (lang) => ipcRenderer.send('set-language', String(lang)),
+
   // Screen picker: the main process asks, the page answers with a source id.
   onPickSource(callback) {
     ipcRenderer.on('pick-source', (_e, request) => callback(request));
+  },
+  // The list of screens and windows, sent once without and once with thumbnails.
+  onPickSources(callback) {
+    ipcRenderer.on('pick-sources', (_e, update) => callback(update));
   },
   pickSource(requestId, sourceId, audio) {
     ipcRenderer.send(`source-picked-${Number(requestId)}`, sourceId ? { sourceId: String(sourceId), audio: !!audio } : null);

@@ -189,7 +189,7 @@ function renderFriends() {
     row.className = 'friend';
     row.innerHTML = `
       <div class="f-avatar"></div>
-      <div class="f-text"><div class="f-name"></div><div class="f-sub"></div></div>
+      <div class="f-text"><div class="f-name" translate="no"></div><div class="f-sub"></div></div>
       <button type="button" class="icon-btn f-remove"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       <button type="button" class="btn primary call-btn">
         <svg viewBox="0 0 24 24"><path d="M6.6 3.5h3l1.5 4-2 1.4a10 10 0 0 0 6 6l1.4-2 4 1.5v3a2 2 0 0 1-2.1 2A16.5 16.5 0 0 1 4.5 5.6a2 2 0 0 1 2.1-2.1z"/></svg>
@@ -202,7 +202,7 @@ function renderFriends() {
     remove.title = `Remove ${f.name}`;
     remove.setAttribute('aria-label', `Remove ${f.name}`);
     remove.onclick = () => {
-      if (!confirm(`Remove ${f.name}? You'll need to swap codes again to call them.`)) return;
+      if (!confirm(I18n.t(`Remove ${f.name}? You'll need to swap codes again to call them.`))) return;
       Rendezvous.removeFriend(f.id);
       startListening();
     };
@@ -322,7 +322,7 @@ function showIncoming(friend, sid) {
   Log.info('call', 'incoming call', { friend: friend.id.slice(0, 6), sid: sid.slice(0, 6) });
   $('#incomingTitle').textContent = `${friend.name} is calling`;
   $('#incoming').hidden = false;
-  document.title = `${friend.name} is calling · Miserecord`;
+  document.title = I18n.t(`${friend.name} is calling · Miserecord`);
   if (window.miserecordDesktop) window.miserecordDesktop.incomingCall(friend.name);
   Ringtone.start();
   // The caller re-sends every few seconds; if that stops, they gave up.
@@ -340,7 +340,7 @@ function hideIncoming() {
   $('#incoming').hidden = true;
   Ringtone.stop();
   if (window.miserecordDesktop) window.miserecordDesktop.callAnswered();
-  document.title = 'Miserecord';
+  document.title = I18n.t('Miserecord');
 }
 
 function declineCall() {
@@ -548,7 +548,7 @@ function setLobbyLocked(locked) {
 function kickPeer(peer) {
   const lobby = state.lobby;
   if (!lobby || lobby.hostId !== state.myId) return;
-  if (!confirm(`Remove ${peer.name} from the lobby?`)) return;
+  if (!confirm(I18n.t(`Remove ${peer.name} from the lobby?`))) return;
   Log.info('lobby', 'removing someone', { id: peer.id.slice(0, 6) });
   lobby.blocked.add(peer.id);
   broadcast({ type: 'kick', id: peer.id });
@@ -862,7 +862,11 @@ function onConnectionState(peer) {
       setLive(true);
       updateRoute();
       clearInterval(state.statsTimer);
-      state.statsTimer = setInterval(updateRoute, 2000);
+      state.statsTicks = 0;
+      state.statsTimer = setInterval(() => {
+        updateRoute();
+        if (++state.statsTicks % 5 === 0) logVideoQuality().catch(() => {});
+      }, 2000);
       break;
     case 'disconnected':
       setStatus(`Connection to ${peer.name} interrupted. Trying to recover…`, 'warn');
@@ -1018,16 +1022,22 @@ function makePersonCard(id, name) {
   card.dataset.peer = id;
   card.classList.add('waiting'); // until the connection is up
   card.querySelector('.label').textContent = name;
+  card.querySelector('.label').setAttribute('translate', 'no');
   card.querySelector('.initial').textContent = initial(name);
   const vol = card.querySelector('.peer-vol input');
+  const pct = card.querySelector('.peer-vol-pct');
+  vol.max = MAX_VOLUME;
   vol.value = 100;
   vol.setAttribute('aria-label', `${name}'s volume`);
   syncSlider(vol, 100);
+  pct.textContent = '100%';
   vol.oninput = () => {
     const peer = state.peers.get(id);
     if (!peer) return;
     peer.volume = Number(vol.value);
     syncSlider(vol);
+    pct.textContent = `${vol.value}%`;
+    pct.classList.toggle('boost', peer.volume > 100);
     applyVolumes();
   };
   card.querySelector('.kick').onclick = () => {
@@ -1281,8 +1291,9 @@ function setChatEnabled(on) {
 function messageShell(author, mine, bubbleClass) {
   const el = document.createElement('div');
   el.className = `msg${mine ? ' me' : ''}`;
-  el.innerHTML = `<div class="meta"><span class="who"></span><span class="when"></span></div><div class="bubble ${bubbleClass}"></div>`;
+  el.innerHTML = `<div class="meta"><span class="who"></span><span class="when"></span></div><div class="bubble ${bubbleClass}" translate="no"></div>`;
   el.querySelector('.who').textContent = mine ? 'You' : author;
+  if (!mine) el.querySelector('.who').setAttribute('translate', 'no');
   el.querySelector('.when').textContent = clock();
   return el;
 }
@@ -1380,6 +1391,7 @@ function addFileCard(author, name, size, mine) {
     <div class="fmeta"><span class="fsize"></span><span class="fstate"></span></div>
     <div class="bar"><i></i></div>`;
   el.querySelector('.fname').textContent = name;
+  el.querySelector('.fname').setAttribute('translate', 'no');
   el.querySelector('.fsize').textContent = formatBytes(size);
   const stateEl = el.querySelector('.fstate');
   const bar = el.querySelector('.bar');
@@ -1463,6 +1475,11 @@ async function toggleScreen() {
     return;
   }
   const video = stream.getVideoTracks()[0];
+  const audio = stream.getAudioTracks()[0];
+  Log.info('media', 'screen share started', {
+    video: video && video.getSettings ? (({ width, height, frameRate }) => ({ width, height, frameRate }))(video.getSettings()) : null,
+    audio: audio ? { label: audio.label, restrictOwnAudio: audio.getSettings ? audio.getSettings().restrictOwnAudio : undefined } : 'none',
+  });
   if (video) {
     if ('contentHint' in video) video.contentHint = 'detail';
     video.addEventListener('ended', () => { if (state.screen && state.screen.stream === stream) stopLocal('screen'); });
@@ -1599,9 +1616,8 @@ function renderRemoteStream(peer, id) {
       entry.audio = new Audio();
       entry.audio.autoplay = true;
       entry.audio.srcObject = stream;
-      applySpeaker(entry.audio);
-      entry.audio.volume = voiceVolumeFor(peer);
-      entry.audio.muted = !!state.deafened;
+      Playback.route(entry.audio, stream);
+      Playback.set(entry.audio, voiceVolumeFor(peer));
       entry.audio.play().catch(() => toast('Click anywhere to enable call audio.'));
       refreshPeerMeter(peer);
     }
@@ -1609,6 +1625,7 @@ function renderRemoteStream(peer, id) {
   }
   // It turned out to be a screen/media stream: drop the mic-style player.
   if (entry.audio) {
+    Playback.unroute(entry.audio);
     entry.audio.srcObject = null;
     entry.audio = null;
     refreshPeerMeter(peer);
@@ -1618,9 +1635,8 @@ function renderRemoteStream(peer, id) {
   if (!entry.tile) {
     const tile = makeTile({ title, remote: true });
     tile.video.srcObject = stream;
-    applySpeaker(tile.video);
+    Playback.route(tile.video, stream);
     addTileVolume(tile);
-    tile.video.muted = !!state.deafened;
     tile.video.play().catch(() => {});
     entry.tile = tile;
   }
@@ -1633,11 +1649,13 @@ function removeRemoteStream(peer, id) {
   if (!entry) return;
   peer.remote.delete(id);
   if (entry.audio) {
+    Playback.unroute(entry.audio);
     entry.audio.srcObject = null;
     entry.audio = null;
     refreshPeerMeter(peer);
   }
   if (entry.tile) {
+    Playback.unroute(entry.tile.video);
     if (state.focusTile === entry.tile.el) exitFocus();
     removeTile(entry.tile.el);
   }
@@ -1750,41 +1768,15 @@ function refreshPeerMeter(peer) {
   }
 }
 
-const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-// Streams slide out instead of vanishing; the layout changes once they're gone.
 function removeTile(el) {
-  if (!el || el.classList.contains('leaving')) return;
-  el.classList.add('leaving');
-  let finished = false;
-  const done = () => {
-    if (finished) return;
-    finished = true;
-    el.remove();
-    updateStageLayout();
-  };
-  if (reducedMotion()) return done();
-  el.addEventListener('animationend', done, { once: true });
-  setTimeout(done, 250); // in case the animation doesn't run
+  if (!el) return;
+  el.remove();
+  updateStageLayout();
 }
 
-// When the first stream appears (or the last one goes), the people glide
-// between the middle of the screen and the top row instead of jumping.
+// With a stream on the stage, the people move to a row at the top.
 function updateStageLayout() {
-  const stage = $('.stage');
-  const want = $('#tiles').children.length > 0;
-  if (stage.classList.contains('has-tiles') === want) return;
-  const people = $('.people');
-  const before = people.getBoundingClientRect();
-  stage.classList.toggle('has-tiles', want);
-  if (reducedMotion()) return;
-  const after = people.getBoundingClientRect();
-  const dy = (before.top + before.height / 2) - (after.top + after.height / 2);
-  if (Math.abs(dy) < 1) return;
-  people.animate(
-    [{ transform: `translateY(${dy}px)` }, { transform: 'none' }],
-    { duration: 240, easing: 'cubic-bezier(.2, .8, .2, 1)' },
-  );
+  $('.stage').classList.toggle('has-tiles', $('#tiles').children.length > 0);
 }
 
 // ===================================================================

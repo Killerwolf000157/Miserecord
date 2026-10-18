@@ -25,10 +25,16 @@ const ICON = path.join(__dirname, '..', 'build', process.platform === 'win32' ? 
 const APP_ORIGIN = 'app://miserecord';
 const UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
 const START_HIDDEN = process.argv.includes('--hidden');
+// On Windows the app draws its own top bar; the minimize, maximize and close
+// buttons stay the real system ones (with snap layouts), drawn over it.
+const OWN_TITLE_BAR = process.platform === 'win32';
+const TITLE_BAR_HEIGHT = 48; // matches the top bar in style.css
+const titleBarColors = (dark) => ({ color: '#00000000', symbolColor: dark ? '#F5F5F7' : '#1D1D1F', height: TITLE_BAR_HEIGHT });
 // Only the app's own files run; the network is limited to relays (wss).
 const CSP = [
   "default-src 'self'",
-  "script-src 'self'",
+  // wasm-unsafe-eval lets the noise suppression model (WebAssembly) run; no other code can.
+  "script-src 'self' 'wasm-unsafe-eval'",
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "media-src 'self' blob: mediastream:",
@@ -44,6 +50,21 @@ protocol.registerSchemesAsPrivileged([
 
 let mainWindow = null;
 let tray = null;
+
+// The page picks the language (Settings > General) and tells us, for the tray
+// menu and notifications. Same wording as public/i18n.js.
+let language = 'en';
+const MAIN_FR = {
+  'Open Miserecord': 'Ouvrir Miserecord',
+  'Start with Windows': 'Démarrer avec Windows',
+  'Keep running when closed': 'Continuer après la fermeture',
+  'Quit Miserecord': 'Quitter Miserecord',
+  'Miserecord is still running': 'Miserecord est toujours lancé',
+  'Friends can still call you. Quit from the tray icon, or turn this off in Settings.': 'Tes amis peuvent toujours t’appeler. Quitte depuis l’icône près de l’horloge, ou désactive ça dans les Réglages.',
+  '{0} is calling': '{0} t’appelle',
+  'Click to open Miserecord and answer.': 'Clique pour ouvrir Miserecord et répondre.',
+};
+const tr = (s, arg) => ((language === 'fr' && MAIN_FR[s]) || s).replace('{0}', arg);
 let quitting = false;
 
 // The development version (npm start) keeps its own data and its own
@@ -137,6 +158,14 @@ function start() {
     if (key === 'setupDone') { prefs.setupDone = !!value; savePrefs(); }
     return true;
   });
+  // The page tells us its light or dark theme so the window buttons match.
+  ipcMain.on('set-language', (_e, lang) => {
+    language = lang === 'fr' ? 'fr' : 'en';
+    refreshTray();
+  });
+  ipcMain.on('title-bar-theme', (_e, dark) => {
+    if (OWN_TITLE_BAR && mainWindow && !mainWindow.isDestroyed()) mainWindow.setTitleBarOverlay(titleBarColors(!!dark));
+  });
   ipcMain.handle('uninstall', (_e, opts) => uninstall(!!(opts && opts.deleteData)));
   ipcMain.on('incoming-call', (_e, name) => notifyIncoming(String(name || 'Your friend').slice(0, 32)));
   ipcMain.on('call-answered', () => {
@@ -155,13 +184,15 @@ function createWindow() {
     icon: ICON,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#F5F5F7',
     autoHideMenuBar: true,
+    ...(OWN_TITLE_BAR ? { titleBarStyle: 'hidden', titleBarOverlay: titleBarColors(nativeTheme.shouldUseDarkColors) } : {}),
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
-      spellcheck: true,
+      // Off: the dictionaries cost memory and are downloaded from Google.
+      spellcheck: false,
       // Calls, ringing and hotkeys keep working while the window is hidden.
       backgroundThrottling: false,
       // The ringtone and your friend's voice can play without a click first.
@@ -192,8 +223,8 @@ function createWindow() {
       prefs.toldAboutTray = true;
       savePrefs();
       new Notification({
-        title: 'Miserecord is still running',
-        body: 'Friends can still call you. Quit from the tray icon, or turn this off in Settings.',
+        title: tr('Miserecord is still running'),
+        body: tr('Friends can still call you. Quit from the tray icon, or turn this off in Settings.'),
         silent: true,
       }).show();
     }
@@ -256,12 +287,12 @@ function createTray() {
 function refreshTray() {
   if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: 'Open Miserecord', click: showWindow },
+    { label: tr('Open Miserecord'), click: showWindow },
     { type: 'separator' },
-    { label: 'Start with Windows', type: 'checkbox', checked: prefs.autostart, enabled: app.isPackaged, click: (item) => setAutostart(item.checked) },
-    { label: 'Keep running when closed', type: 'checkbox', checked: prefs.background, click: (item) => setBackground(item.checked) },
+    { label: tr('Start with Windows'), type: 'checkbox', checked: prefs.autostart, enabled: app.isPackaged, click: (item) => setAutostart(item.checked) },
+    { label: tr('Keep running when closed'), type: 'checkbox', checked: prefs.background, click: (item) => setBackground(item.checked) },
     { type: 'separator' },
-    { label: 'Quit Miserecord', click: () => { quitting = true; app.quit(); } },
+    { label: tr('Quit Miserecord'), click: () => { quitting = true; app.quit(); } },
   ]));
 }
 
@@ -281,33 +312,46 @@ function setupPermissions(ses) {
 // ---------------------------------------------------------------- screen picker
 let pickerSeq = 0;
 
+// The picker opens at once. Windows takes a moment to list windows and longer
+// to draw thumbnails, so the list arrives first and the thumbnails after it.
 function setupScreenPicker(ses) {
   ses.setDisplayMediaRequestHandler(async (request, callback) => {
+    const id = ++pickerSeq;
+    let sources = [];
+    let answered = false;
+    const describe = (list) => list.map((s) => ({
+      id: s.id,
+      name: s.name,
+      kind: s.id.startsWith('screen:') ? 'screen' : 'window',
+      thumbnail: s.thumbnail && !s.thumbnail.isEmpty() ? s.thumbnail.toDataURL() : '',
+      icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : '',
+    }));
+    const update = (list) => {
+      sources = list;
+      if (!answered) send('pick-sources', { id, sources: describe(list) });
+    };
+    ipcMain.once(`source-picked-${id}`, (_e, choice) => {
+      answered = true;
+      const source = choice && sources.find((s) => s.id === choice.sourceId);
+      // No arguments means cancelled; an empty object throws in recent Electron.
+      if (!source) return callback();
+      const video = { id: source.id, name: source.name };
+      // On Windows, "loopback" captures everything you hear: games, music, videos.
+      // The page asks for restrictOwnAudio, which leaves Miserecord's own sound out.
+      callback(choice.audio && process.platform === 'win32' ? { video, audio: 'loopback' } : { video });
+    });
+    send('pick-source', { id, sources: null, canShareAudio: process.platform === 'win32' });
     try {
-      const sources = await desktopCapturer.getSources({
-        types: ['screen', 'window'],
-        thumbnailSize: { width: 320, height: 180 },
-        fetchWindowIcons: true,
-      });
-      const id = ++pickerSeq;
-      const list = sources.map((s) => ({
-        id: s.id,
-        name: s.name,
-        kind: s.id.startsWith('screen:') ? 'screen' : 'window',
-        thumbnail: s.thumbnail.isEmpty() ? '' : s.thumbnail.toDataURL(),
-        icon: s.appIcon && !s.appIcon.isEmpty() ? s.appIcon.toDataURL() : '',
-      }));
-      mainWindow.webContents.send('pick-source', { id, sources: list, canShareAudio: process.platform === 'win32' });
-      ipcMain.once(`source-picked-${id}`, (_e, choice) => {
-        const source = choice && sources.find((s) => s.id === choice.sourceId);
-        // No arguments means cancelled; an empty object throws in recent Electron.
-        if (!source) return callback();
-        // On Windows, "loopback" captures everything you hear: games, music, videos.
-        callback(choice.audio && process.platform === 'win32' ? { video: source, audio: 'loopback' } : { video: source });
-      });
+      update(await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: true }));
+      if (answered) return;
+      update(await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true }));
     } catch (err) {
       console.error('screen picker failed', err);
-      try { callback(); } catch { /* already answered */ }
+      if (!answered) {
+        answered = true;
+        send('pick-sources', { id, sources: [], failed: true });
+        try { callback(); } catch { /* already answered */ }
+      }
     }
   });
 }
@@ -321,7 +365,7 @@ function notifyIncoming(name) {
   if (mainWindow.isVisible() && !mainWindow.isFocused()) mainWindow.flashFrame(true);
   if (visible || !Notification.isSupported()) return;
   if (callNotification) callNotification.close();
-  callNotification = new Notification({ title: `${name} is calling`, body: 'Click to open Miserecord and answer.', silent: true });
+  callNotification = new Notification({ title: tr('{0} is calling', name), body: tr('Click to open Miserecord and answer.'), silent: true });
   callNotification.on('click', showWindow);
   callNotification.show();
 }

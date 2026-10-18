@@ -8,7 +8,9 @@ const SETTINGS_DEFAULTS = {
   micId: '',
   speakerId: '',
   echo: true,
-  noise: true,
+  // off | standard (built-in) | strong (RNNoise) | strongest (GTCRN). GTCRN removes
+  // hiss and key clicks by 40-50 dB in tests, RNNoise only a few dB.
+  noise: 'strongest',
   agc: true,
   // High by default. These are ceilings: WebRTC lowers the rate on its own when
   // a connection can't keep up, so a slow line still works.
@@ -19,12 +21,13 @@ const SETTINGS_DEFAULTS = {
   videoQuality: 'veryhigh', // up to 20 Mbps, enough for crisp 1440p60
   motion: 'auto',
   codec: 'auto',
+  language: 'auto',     // auto follows Windows; en | fr
 };
 
 // Earlier versions saved their (lower) defaults with every settings change.
 // Values still equal to those old defaults were never picked by hand, so they
 // move up to the new ones. Anything you chose yourself stays.
-const SETTINGS_VERSION = 2;
+const SETTINGS_VERSION = 3;
 const OLD_DEFAULTS = { voice: 'high', shareRes: 'native', shareFps: '30', videoQuality: 'high' };
 
 const VOICE_BITRATE = { standard: 32000, high: 64000, veryhigh: 128000, hifi: 256000 };
@@ -35,11 +38,14 @@ const CODEC_NAMES = { 'video/AV1': 'AV1, best quality', 'video/VP9': 'VP9', 'vid
 const settings = (() => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('miserecord.settings')) || {}; } catch { /* storage off */ }
-  if ((saved.version || 1) < SETTINGS_VERSION) {
+  if ((saved.version || 1) < 2) {
     for (const [key, old] of Object.entries(OLD_DEFAULTS)) {
       if (saved[key] === old) delete saved[key];
     }
   }
+  // Version 3 turned the noise switch into a choice. On becomes the new default.
+  if (saved.noise === true) delete saved.noise;
+  if (saved.noise === false) saved.noise = 'off';
   return { ...SETTINGS_DEFAULTS, ...saved, version: SETTINGS_VERSION };
 })();
 
@@ -59,7 +65,8 @@ function micConstraints(withDevice = true) {
   const hifi = isHifi();
   const audio = {
     echoCancellation: hifi ? false : settings.echo,
-    noiseSuppression: hifi ? false : settings.noise,
+    // The stronger modes do their own noise removal; stacking both dulls the voice.
+    noiseSuppression: hifi ? false : settings.noise === 'standard',
     autoGainControl: hifi ? false : settings.agc,
     sampleRate: { ideal: 48000 },
   };
@@ -69,7 +76,7 @@ function micConstraints(withDevice = true) {
 }
 
 // Falls back to the default mic if the saved one was unplugged.
-async function getMic() {
+async function getRawMic() {
   try {
     return await navigator.mediaDevices.getUserMedia(micConstraints(true));
   } catch (err) {
@@ -77,6 +84,19 @@ async function getMic() {
       return navigator.mediaDevices.getUserMedia(micConstraints(false));
     }
     throw err;
+  }
+}
+
+// The microphone, through strong noise suppression when that's on. If the
+// model can't load, the call still goes ahead with the plain microphone.
+async function getMic() {
+  const raw = await getRawMic();
+  if (isHifi() || !Denoise.modes.includes(settings.noise)) return raw;
+  try {
+    return await Denoise.wrap(raw, settings.noise);
+  } catch (err) {
+    Log.warn('media', 'noise suppression unavailable, using the plain microphone', err);
+    return raw;
   }
 }
 
@@ -94,8 +114,10 @@ function shareVideoConstraints() {
 function shareConstraints() {
   return {
     video: shareVideoConstraints(),
-    // Shared audio is music or game sound: no voice processing.
-    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    // Shared audio is music or game sound: no voice processing. restrictOwnAudio
+    // leaves Miserecord's own sound out of the system audio, so your friends
+    // don't hear themselves (and the call) coming back through your stream.
+    audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, restrictOwnAudio: true },
     systemAudio: 'include',
   };
 }
@@ -150,20 +172,53 @@ async function applySendParamsTo(peer) {
   }
 }
 
-// Ask for stereo Opus up to 510 kbps; the actual rate is capped by applySendParams().
+// WebRTC starts video at a few hundred kbps and ramps up over many seconds, so a
+// stream looks blurry at first. Start higher; it still backs off on a slow line.
+const VIDEO_START_KBPS = 4000;
+
+// Merge parameters into a payload type's fmtp line, adding the line if missing.
+function setFmtp(sdp, pt, extra) {
+  const line = new RegExp(`a=fmtp:${pt} ([^\\r\\n]*)`);
+  if (line.test(sdp)) {
+    return sdp.replace(line, (_, params) => {
+      const map = new Map(params.split(';').map((p) => p.trim()).filter(Boolean).map((p) => p.split('=')));
+      for (const [k, v] of Object.entries(extra)) map.set(k, v);
+      return `a=fmtp:${pt} ${[...map].map(([k, v]) => `${k}=${v}`).join(';')}`;
+    });
+  }
+  const rtpmap = new RegExp(`(a=rtpmap:${pt} [^\\r\\n]*)(\\r?\\n)`);
+  return sdp.replace(rtpmap, (_, map, nl) => `${map}${nl}a=fmtp:${pt} ${Object.entries(extra).map(([k, v]) => `${k}=${v}`).join(';')}${nl}`);
+}
+
+// Ask for stereo Opus up to 510 kbps (the actual rate is capped by applySendParams())
+// and a higher starting rate for video.
 function mungeSdp(sdp) {
   const m = sdp.match(/a=rtpmap:(\d+) opus\/48000\/2/i);
-  if (!m) return sdp;
-  const pt = m[1];
-  const line = new RegExp(`a=fmtp:${pt} ([^\\r\\n]*)`);
-  const extra = { stereo: '1', 'sprop-stereo': '1', maxaveragebitrate: '510000' };
-  if (!line.test(sdp)) return sdp;
-  return sdp.replace(line, (_, params) => {
-    const map = new Map(params.split(';').map((p) => p.trim()).filter(Boolean).map((p) => p.split('=')));
-    for (const [k, v] of Object.entries(extra)) map.set(k, v);
-    return `a=fmtp:${pt} ${[...map].map(([k, v]) => `${k}=${v}`).join(';')}`;
-  });
+  if (m) sdp = setFmtp(sdp, m[1], { stereo: '1', 'sprop-stereo': '1', maxaveragebitrate: '510000' });
+  const cap = VIDEO_BITRATE[settings.videoQuality];
+  const start = String(Math.round(Math.min(VIDEO_START_KBPS, cap ? cap / 1000 : VIDEO_START_KBPS)));
+  for (const [, pt] of sdp.matchAll(/a=rtpmap:(\d+) (?:VP8|VP9|AV1|H264)\/90000/gi)) {
+    sdp = setFmtp(sdp, pt, { 'x-google-start-bitrate': start });
+  }
+  return sdp;
 }
+
+// Codecs this computer can encode on the graphics card, best first. A software
+// encoder struggles with 1440p60 and the stream turns blocky or choppy.
+const hardwareCodecs = [];
+(async () => {
+  if (!navigator.mediaCapabilities || !navigator.mediaCapabilities.encodingInfo) return;
+  for (const type of ['video/AV1', 'video/VP9', 'video/H264']) {
+    try {
+      const info = await navigator.mediaCapabilities.encodingInfo({
+        type: 'webrtc',
+        video: { contentType: type, width: 2560, height: 1440, bitrate: 20e6, framerate: 60 },
+      });
+      if (info.supported && info.powerEfficient) hardwareCodecs.push(type);
+    } catch { /* not supported here */ }
+  }
+  Log.info('media', 'hardware video encoders', hardwareCodecs.length ? hardwareCodecs.join(', ') : 'none');
+})();
 
 function supportedVideoCodecs() {
   const send = (window.RTCRtpSender && RTCRtpSender.getCapabilities && RTCRtpSender.getCapabilities('video')) || { codecs: [] };
@@ -177,10 +232,10 @@ function applyCodecPrefs(pc) {
   if (!window.RTCRtpTransceiver || !('setCodecPreferences' in RTCRtpTransceiver.prototype)) return;
   const caps = RTCRtpReceiver.getCapabilities && RTCRtpReceiver.getCapabilities('video');
   if (!caps) return;
-  const want = settings.codec === 'auto' ? null : settings.codec;
-  const ordered = want
-    ? [...caps.codecs.filter((c) => c.mimeType === want), ...caps.codecs.filter((c) => c.mimeType !== want)]
-    : [];
+  // Automatic puts a hardware-encoded codec first when there is one.
+  const want = settings.codec === 'auto' ? hardwareCodecs.filter((t) => supportedVideoCodecs().includes(t)) : [settings.codec];
+  const rank = (c) => (want.includes(c.mimeType) ? want.indexOf(c.mimeType) : want.length);
+  const ordered = want.length ? [...caps.codecs].sort((a, b) => rank(a) - rank(b)) : [];
   for (const t of pc.getTransceivers()) {
     if (t.stopped || !t.receiver.track || t.receiver.track.kind !== 'video') continue;
     try { t.setCodecPreferences(ordered); } catch (err) { Log.warn('pc', 'codec preference rejected', err); }
@@ -199,7 +254,7 @@ async function setLocal(pc) {
       return;
     } catch (err) {
       state.mungeRejected = true;
-      Log.warn('pc', 'browser rejected the stereo audio tweak, using its own description', err);
+      Log.warn('pc', 'the stereo audio and start bitrate tweaks were rejected, using the default description', err);
     }
   }
   await pc.setLocalDescription(desc);
@@ -254,6 +309,9 @@ function onSettingChanged(key) {
     case 'theme':
       applyTheme();
       break;
+    case 'language':
+      I18n.apply(settings.language);
+      break;
     case 'micId':
     case 'echo':
     case 'noise':
@@ -281,6 +339,7 @@ function onSettingChanged(key) {
       break;
     case 'speakerId':
       for (const el of allRemoteMediaElements()) applySpeaker(el);
+      Playback.applySink();
       break;
     case 'codec':
       if (state.peers.size) {
@@ -357,7 +416,7 @@ function initSettings() {
   for (const b of document.querySelectorAll('#sTheme button')) b.onclick = () => { setSetting('theme', b.dataset.value); syncTheme(); };
   $('#sForget').onclick = () => {
     const n = Rendezvous.friends().length;
-    if (!n || !confirm(`Remove all ${n} saved friend${n === 1 ? '' : 's'}? You'll need to swap codes again to call them.`)) return;
+    if (!n || !confirm(I18n.t(`Remove all ${n} saved friend${n === 1 ? '' : 's'}? You'll need to swap codes again to call them.`))) return;
     for (const f of Rendezvous.friends()) Rendezvous.removeFriend(f.id);
     startListening();
     syncGeneral();
@@ -366,12 +425,13 @@ function initSettings() {
   // Audio
   const bindSelect = (id, key) => { $(id).onchange = () => setSetting(key, $(id).value); };
   const bindSwitch = (id, key) => { $(id).onchange = () => setSetting(key, $(id).checked); };
+  bindSelect('#sLanguage', 'language');
   bindSelect('#sMic', 'micId');
   bindSelect('#sSpeaker', 'speakerId');
   bindSelect('#sVoice', 'voice');
   bindSelect('#sStreamAudio', 'streamAudio');
   bindSwitch('#sEcho', 'echo');
-  bindSwitch('#sNoise', 'noise');
+  bindSelect('#sNoise', 'noise');
   bindSwitch('#sAgc', 'agc');
   $('#sMicTest').onclick = () => (state.testMic ? stopMicTest() : startMicTest());
 
@@ -386,10 +446,6 @@ function initSettings() {
   $('#sCodec').append(new Option('Automatic', 'auto'));
   for (const c of codecs) $('#sCodec').append(new Option(CODEC_NAMES[c], c));
   if (settings.codec !== 'auto' && !codecs.includes(settings.codec)) settings.codec = 'auto';
-
-  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
-    navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
-  }
 
   // Troubleshooting
   $('#sLogCopy').onclick = async () => {
@@ -434,10 +490,10 @@ function openSettings() {
   $('#sName').value = $('#name').value || state.name || '';
   syncTheme();
   syncGeneral();
+  $('#sLanguage').value = settings.language;
   $('#sVoice').value = settings.voice;
   $('#sStreamAudio').value = settings.streamAudio;
   $('#sEcho').checked = settings.echo;
-  $('#sNoise').checked = settings.noise;
   $('#sAgc').checked = settings.agc;
   syncProcessingSwitches();
   $('#sShareRes').value = settings.shareRes;
@@ -450,6 +506,11 @@ function openSettings() {
   $('#sSpeaker').disabled = !canPickSpeaker;
   $('#sSpeakerNote').hidden = canPickSpeaker;
   refreshDevices();
+  // Watching for plugged-in devices keeps the camera service running (about
+  // 60 MB), so it only runs while the device lists are on screen.
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', refreshDevices);
+  }
   $('#settings').hidden = false;
   clearInterval(state.settingsTimer);
   state.settingsTimer = setInterval(updateSettingsLive, 1000);
@@ -458,6 +519,9 @@ function openSettings() {
 
 function closeSettings() {
   $('#settings').hidden = true;
+  if (navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+    navigator.mediaDevices.removeEventListener('devicechange', refreshDevices);
+  }
   clearInterval(state.settingsTimer);
   stopMicTest();
 }
@@ -483,13 +547,15 @@ function syncGeneral() {
 
 function syncProcessingSwitches() {
   const hifi = isHifi();
-  for (const [id, key] of [['#sEcho', 'echo'], ['#sNoise', 'noise'], ['#sAgc', 'agc']]) {
+  for (const [id, key] of [['#sEcho', 'echo'], ['#sAgc', 'agc']]) {
     $(id).disabled = hifi;
     $(id).checked = hifi ? false : settings[key];
   }
+  $('#sNoise').disabled = hifi;
+  $('#sNoise').value = hifi ? 'off' : settings.noise;
   $('#sMicNote').textContent = hifi
     ? 'Hi-Fi voice is on, so these are off. Use headphones so your friend doesn\'t hear themselves.'
-    : 'Echo cancellation stops your friend hearing themselves through your speakers. Turn it off only with headphones.';
+    : 'Echo cancellation stops your friend hearing themselves through your speakers. Turn it off only with headphones. Strong noise suppression uses a small AI model on your computer to remove keyboards, fans and background noise.';
 }
 
 async function refreshDevices() {
@@ -555,6 +621,34 @@ function stopMicTest(keepButton = false) {
 }
 
 // ---------- live stats in the video tab ----------
+const LIMIT_NAMES = { cpu: 'limited by CPU', bandwidth: 'limited by bandwidth', other: 'limited' };
+
+// While you share, write what the encoder actually does to the log every 10 s,
+// so a blurry or choppy stream can be traced to CPU, bandwidth or the codec.
+async function logVideoQuality() {
+  if (!state.screen && !state.media) return;
+  for (const peer of state.peers.values()) {
+    if (peer.pc.connectionState !== 'connected') continue;
+    const stats = await peer.pc.getStats();
+    let pair = null;
+    stats.forEach((r) => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
+    stats.forEach((r) => {
+      if (r.type !== 'outbound-rtp' || r.kind !== 'video' || !r.frameWidth) return;
+      const codec = r.codecId && stats.get(r.codecId);
+      Log.info('stats', 'sending video', {
+        peer: peer.id.slice(0, 6),
+        size: `${r.frameWidth}x${r.frameHeight}`,
+        fps: r.framesPerSecond != null ? Math.round(r.framesPerSecond) : null,
+        codec: codec ? codec.mimeType.replace('video/', '') : null,
+        encoder: r.encoderImplementation || null,
+        gpu: r.powerEfficientEncoder,
+        limit: r.qualityLimitationReason,
+        targetMbps: r.targetBitrate ? +(r.targetBitrate / 1e6).toFixed(1) : null,
+        availableMbps: pair && pair.availableOutgoingBitrate ? +(pair.availableOutgoingBitrate / 1e6).toFixed(1) : null,
+      });
+    });
+  }
+}
 async function updateSettingsLive() {
   if (state.mic && !state.testMic && !$('[data-panel="audio"]').hidden) startMicTest();
   const live = [...state.peers.values()].filter((p) => p.pc.connectionState === 'connected');
@@ -590,7 +684,9 @@ async function updateSettingsLive() {
     next[r.key] = { bytes: r[bytesKey], t: now };
     const mbps = p ? ((r[bytesKey] - p.bytes) * 8) / ((now - p.t) / 1000) / 1e6 : null;
     const fps = r.framesPerSecond ? `${Math.round(r.framesPerSecond)} fps` : '';
-    return [`${r.frameWidth}×${r.frameHeight}`, fps, mbps != null ? `${mbps.toFixed(1)} Mbps` : '', name].filter(Boolean).join('  ');
+    const hw = r.powerEfficientEncoder === true || r.powerEfficientDecoder === true ? ' (GPU)' : '';
+    const limit = LIMIT_NAMES[r.qualityLimitationReason] || '';
+    return [`${r.frameWidth}×${r.frameHeight}`, fps, mbps != null ? `${mbps.toFixed(1)} Mbps` : '', name + hw, limit].filter(Boolean).join('  ');
   };
   $('#sStatsOut').textContent = describe(out, 'bytesSent', outStats) + (sendingTo > 1 ? `  to each of ${sendingTo}` : '');
   $('#sStatsIn').textContent = describe(inn, 'bytesReceived', inStats);

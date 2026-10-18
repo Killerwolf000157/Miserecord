@@ -13,11 +13,13 @@ Private calls with your friends, 1:1 or in groups of up to 8, with no server to 
   up to 4K at 60 fps, video bitrate up to 50 Mbps, codec (AV1, VP9, H.264, VP8), and live
   stats of what's actually being sent and received
 - **Push to talk and shortcuts** (mute, leave), with side mouse buttons supported. In the desktop app they work even while a game is in front
-- **Separate volume** for your friend's voice and for streams
+- **AI noise suppression** that runs on your computer and removes keyboards, fans and hiss (Settings > Audio)
+- **Separate volume** for your friend's voice and for streams, and for each person up to 200%
 - **Mute everyone else** next to Mute: silences every voice and stream you receive
 - **Quick quality switch** (Low / Medium / High) on your own screen share or stream
 - **Optional soft ringtone** for incoming calls, off by default
 - Light and dark mode
+- English and French (Settings > General > Language; Automatic follows Windows)
 
 Audio, video, chat and files travel **directly between the two browsers** over WebRTC,
 encrypted end to end (DTLS-SRTP / DTLS). Nothing relays them.
@@ -33,7 +35,8 @@ The installer isn't code-signed yet, so Windows SmartScreen may say "Windows pro
 Click **More info → Run anyway**.
 
 The desktop app adds:
-- an in-app screen picker with full computer sound on Windows
+- an in-app screen picker with full computer sound on Windows, leaving out Miserecord's own sound so friends never hear themselves
+- its own top bar with the real Windows minimize, maximize and close buttons
 - running in the tray when you close the window, so friends can still call you, and an
   option to start hidden with Windows (Settings → General)
 - push to talk and shortcuts that work everywhere, even in games
@@ -151,7 +154,9 @@ public/settings.js    settings sheet: devices, quality, codecs, theme, network
 public/rendezvous.js  friends, encryption, Nostr relay client, BIP-340 signatures
 public/log.js         connection log (Settings → General → Troubleshooting)
 public/extras.js      volume, ringtone, push to talk and shortcuts
-public/desktop.js     desktop extras: screen picker, update banner
+public/desktop.js     desktop extras: screen picker, update banner, window buttons
+public/denoise.js     AI noise suppression for the microphone (models in public/vendor/noise)
+public/i18n.js        English and French
 electron/main.js      desktop app: window, tray, permissions, screen capture, global hotkeys, auto-update
 electron/preload.js   the small bridge between the page and the desktop app
 build/make-icon.js    draws the app icon

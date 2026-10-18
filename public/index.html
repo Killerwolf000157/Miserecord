@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="titlebar-drag" aria-hidden="true"></div>
 
 <!-- ============================== Join ============================== -->
 <section id="join" class="screen center">
@@ -316,6 +317,12 @@
               <button type="button" data-value="dark">Dark</button>
             </div>
           </div>
+          <label class="row"><span class="row-label">Language</span>
+            <select id="sLanguage">
+              <option value="auto">Automatic</option>
+              <option value="en" translate="no">English</option>
+              <option value="fr" translate="no">Français</option>
+            </select></label>
         </div>
         <h3 class="group-title">Saved friends</h3>
         <div class="group">
@@ -362,7 +369,13 @@
             <button type="button" class="btn small" id="sMicTest">Test</button>
           </div>
           <label class="row"><span class="row-label">Echo cancellation</span><input type="checkbox" class="switch" id="sEcho"></label>
-          <label class="row"><span class="row-label">Noise suppression</span><input type="checkbox" class="switch" id="sNoise"></label>
+          <label class="row"><span class="row-label">Noise suppression</span>
+            <select id="sNoise">
+              <option value="off">Off</option>
+              <option value="standard">Standard</option>
+              <option value="strong">AI, light</option>
+              <option value="strongest">AI, strong</option>
+            </select></label>
           <label class="row"><span class="row-label">Automatic volume</span><input type="checkbox" class="switch" id="sAgc"></label>
         </div>
         <p class="group-note" id="sMicNote"></p>
@@ -388,9 +401,9 @@
         <h3 class="group-title">Volume</h3>
         <div class="group">
           <label class="row"><span class="row-label">Your friend's voice</span>
-            <input type="range" class="slider" id="sVoiceVol" min="0" max="100" step="1"><span class="row-value vol" id="sVoiceVolText"></span></label>
+            <input type="range" class="slider" id="sVoiceVol" min="0" max="200" step="1"><span class="row-value vol" id="sVoiceVolText"></span></label>
           <label class="row"><span class="row-label">Streams and shared screens</span>
-            <input type="range" class="slider" id="sStreamVol" min="0" max="100" step="1"><span class="row-value vol" id="sStreamVolText"></span></label>
+            <input type="range" class="slider" id="sStreamVol" min="0" max="200" step="1"><span class="row-value vol" id="sStreamVolText"></span></label>
         </div>
 
         <h3 class="group-title">Interface sounds</h3>
@@ -592,7 +605,8 @@
     <div class="pname"><span class="label"></span></div>
     <label class="peer-vol">
       <svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>
-      <input type="range" class="slider" min="0" max="100" step="1">
+      <input type="range" class="slider" min="0" max="200" step="1">
+      <span class="peer-vol-pct"></span>
     </label>
   </div>
 </template>
@@ -601,11 +615,13 @@
 
 <script src="log.js"></script>
 <script src="rendezvous.js"></script>
+<script src="denoise.js"></script>
 <script src="settings.js"></script>
 <script src="extras.js"></script>
 <script src="sounds.js"></script>
 <script src="app.js"></script>
 <script src="desktop.js"></script>
 <script src="select.js"></script>
+<script src="i18n.js"></script>
 </body>
 </html>

@@ -16,18 +16,78 @@ Object.assign(SETTINGS_DEFAULTS, {
 for (const [k, v] of Object.entries(SETTINGS_DEFAULTS)) if (!(k in settings)) settings[k] = v;
 
 // ------------------------------------------------------------------ volume
+// Volumes go up to 200%. A media element stops at 100%, so friends' voices and
+// streams play through Web Audio instead: element (muted, it only feeds the
+// stream) -> gain -> limiter -> speakers. The limiter keeps a boosted voice from
+// distorting when it gets loud.
+const MAX_VOLUME = 200;
+
+const Playback = {
+  ctx: null,
+  bus: null,
+
+  context() {
+    if (!this.ctx || this.ctx.state === 'closed') {
+      this.ctx = new AudioContext({ latencyHint: 'interactive' });
+      const limiter = this.ctx.createDynamicsCompressor();
+      limiter.threshold.value = -2;
+      limiter.knee.value = 0;
+      limiter.ratio.value = 20;
+      limiter.attack.value = 0.002;
+      limiter.release.value = 0.12;
+      limiter.connect(this.ctx.destination);
+      this.bus = limiter;
+      this.applySink();
+    }
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    return this.ctx;
+  },
+
+  applySink() {
+    if (this.ctx && typeof this.ctx.setSinkId === 'function') {
+      this.ctx.setSinkId(settings.speakerId || '').catch(() => { if (settings.speakerId) this.ctx.setSinkId('').catch(() => {}); });
+    }
+  },
+
+  // Play a remote stream's audio through a gain we control. The element stays
+  // muted but playing: Chromium only delivers a remote stream's audio to Web
+  // Audio while an element plays it.
+  route(el, stream) {
+    el.muted = true;
+    const connect = () => {
+      if (el._route || !stream.getAudioTracks().length) return;
+      const ctx = this.context();
+      const source = ctx.createMediaStreamSource(stream);
+      const gain = ctx.createGain();
+      gain.gain.value = 0;
+      source.connect(gain).connect(this.bus);
+      el._route = { source, gain };
+      applyVolumes();
+    };
+    connect();
+    // A shared screen's sound can arrive after its picture.
+    stream.addEventListener('addtrack', connect);
+  },
+
+  unroute(el) {
+    if (!el || !el._route) return;
+    el._route.source.disconnect();
+    el._route.gain.disconnect();
+    el._route = null;
+  },
+
+  set(el, volume) {
+    if (!el || !el._route) return;
+    const v = state.deafened ? 0 : Math.max(0, Math.min(MAX_VOLUME / 100, volume));
+    el._route.gain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.015);
+  },
+};
 
 function applyVolumes() {
   for (const peer of state.peers.values()) {
     for (const entry of peer.remote.values()) {
-      if (entry.audio) {
-        entry.audio.volume = voiceVolumeFor(peer);
-        entry.audio.muted = !!state.deafened;
-      }
-      if (entry.tile) {
-        entry.tile.video.volume = settings.streamVolume / 100;
-        entry.tile.video.muted = !!state.deafened;
-      }
+      if (entry.audio) Playback.set(entry.audio, voiceVolumeFor(peer));
+      if (entry.tile) Playback.set(entry.tile.video, settings.streamVolume / 100);
     }
   }
   for (const s of document.querySelectorAll('.tile.remote .tile-vol .slider')) syncSlider(s, settings.streamVolume);
@@ -46,16 +106,17 @@ function addTileVolume(tile) {
   const wrap = document.createElement('label');
   wrap.className = 'tile-vol';
   wrap.title = 'Stream volume';
-  wrap.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/></svg><input type="range" class="slider" min="0" max="100" step="1" aria-label="Stream volume">';
+  wrap.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/></svg><input type="range" class="slider" min="0" max="${MAX_VOLUME}" step="1" aria-label="Stream volume">';
   const input = wrap.querySelector('input');
   input.oninput = () => {
     setSetting('streamVolume', Number(input.value));
     syncSlider(input);
+    wrap.title = `Stream volume ${input.value}%`;
     applyVolumes();
   };
   syncSlider(input, settings.streamVolume);
+  wrap.title = `Stream volume ${settings.streamVolume}%`;
   tile.el.querySelector('.actions').prepend(wrap);
-  tile.video.volume = settings.streamVolume / 100;
 }
 
 // ------------------------------------------------------------------ ringtone
@@ -370,7 +431,7 @@ function initExtras() {
       $('#sBackground').checked = p.background;
       $('#sAutostart').checked = p.autostart;
       $('#sAutostart').disabled = !p.canAutostart;
-      if (!p.canAutostart) $('#sBackgroundNote').textContent += ' Starting with Windows works in the installed app.';
+      if (!p.canAutostart) $('#sBackgroundNote').append(' ', Object.assign(document.createElement('span'), { textContent: 'Starting with Windows works in the installed app.' }));
       pushHotkeys();
       // First launch of the installed app: pick microphone and speaker, and
       // opt in to starting with Windows (off unless you choose it).
