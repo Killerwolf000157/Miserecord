@@ -364,17 +364,16 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
   position: relative; display: flex; flex-direction: column; overflow: hidden;
   border-radius: var(--r-lg); background: var(--surface);
 }
-/* a stream you're watching gets a rainbow frame, so it's clear at a glance */
+/* a stream you're watching gets a thin rainbow outline */
 .tile.remote {
-  border: 3px solid transparent;
+  border: 1.5px solid transparent;
   background: linear-gradient(var(--surface), var(--surface)) padding-box,
               linear-gradient(120deg, var(--aurora-stops)) border-box;
-  box-shadow: 0 0 24px -6px rgba(178, 139, 255, .6);
 }
 /* full screen keeps the frame, drawn over the picture's edge */
 .stage-wrap.focus .tile.remote.focused::after {
   content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none;
-  padding: 3px;
+  padding: 1.5px;
   background: linear-gradient(120deg, var(--aurora-stops));
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor; mask-composite: exclude;

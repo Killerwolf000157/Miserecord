@@ -13,7 +13,7 @@
 'use strict';
 
 const {
-  app, BrowserWindow, Menu, Notification, Tray, desktopCapturer, ipcMain, nativeImage, nativeTheme, net, protocol, screen, session, shell,
+  app, BrowserWindow, Menu, Notification, Tray, desktopCapturer, ipcMain, nativeImage, nativeTheme, net, protocol, session, shell,
 } = require('electron');
 const fs = require('fs');
 const path = require('path');
@@ -239,7 +239,7 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; endScreenShare(); });
   // Closed to the tray with an update waiting: install it now, quietly.
   mainWindow.on('hide', () => setTimeout(() => installWhenIdle(), 1000));
-  // A reload drops any share, so the frame and capture hiding go with it.
+  // A reload drops any share, so the capture hiding goes with it.
   mainWindow.webContents.on('did-start-loading', endScreenShare);
 
   // Links open in the real browser; the app never navigates away from itself.
@@ -347,7 +347,7 @@ function setupScreenPicker(ses) {
       // No arguments means cancelled; an empty object throws in recent Electron.
       if (!source) return callback();
       const video = { id: source.id, name: source.name };
-      if (source.id.startsWith('screen:')) startScreenShare(source.display_id);
+      if (source.id.startsWith('screen:')) startScreenShare();
       // On Windows, "loopback" captures everything you hear: games, music, videos.
       // The page asks for restrictOwnAudio, which leaves Miserecord's own sound out.
       callback(choice.audio && process.platform === 'win32' ? { video, audio: 'loopback' } : { video });
@@ -369,53 +369,14 @@ function setupScreenPicker(ses) {
 }
 
 // ---------------------------------------------------------------- sharing a whole screen
-// While you share a monitor:
-// - Miserecord's own window is left out of the capture (Windows' "exclude from
-//   capture"), so your preview can't film itself into an endless, flashing mirror.
-//   Your friends see whatever is behind the window instead.
-// - A rainbow frame glows around that monitor so you always know it's live. It
-//   is click-through and also left out of the capture: only you see it.
-let shareFrame = null;
-
-function startScreenShare(displayId) {
+// While you share a monitor, Miserecord's own window is left out of the capture
+// (Windows' "exclude from capture"), so your preview can't film itself into an
+// endless, flashing mirror. Your friends see whatever is behind the window instead.
+function startScreenShare() {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setContentProtection(true);
-  stopShareFrame();
-  const display = screen.getAllDisplays().find((d) => String(d.id) === String(displayId)) || screen.getPrimaryDisplay();
-  shareFrame = new BrowserWindow({
-    ...display.bounds,
-    transparent: true,
-    frame: false,
-    focusable: false,
-    skipTaskbar: true,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    hasShadow: false,
-    show: false,
-    title: 'Miserecord share frame',
-    webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false },
-  });
-  shareFrame.setIgnoreMouseEvents(true);
-  shareFrame.setContentProtection(true);
-  shareFrame.setAlwaysOnTop(true, 'screen-saver');
-  shareFrame.loadURL(`${APP_ORIGIN}/share-frame.html?lang=${language}`);
-  shareFrame.once('ready-to-show', () => {
-    if (!shareFrame) return;
-    shareFrame.showInactive();
-    // Windows fits new windows above the taskbar; stretch over the whole monitor.
-    shareFrame.setBounds(display.bounds);
-  });
-  shareFrame.on('closed', () => { shareFrame = null; });
-}
-
-function stopShareFrame() {
-  if (shareFrame && !shareFrame.isDestroyed()) shareFrame.close();
-  shareFrame = null;
 }
 
 function endScreenShare() {
-  stopShareFrame();
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setContentProtection(false);
 }
 

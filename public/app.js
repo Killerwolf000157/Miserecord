@@ -1570,8 +1570,8 @@ async function streamFile(file) {
   label($('#mediaBtn'), 'Stop streaming');
 }
 
-// The desktop app hides itself from screen captures and frames the shared
-// monitor while you share; this undoes both.
+// The desktop app hides itself from screen captures while you share a monitor;
+// this undoes it.
 function shareEnded() {
   if (window.miserecordDesktop && window.miserecordDesktop.shareEnded) window.miserecordDesktop.shareEnded();
 }

@@ -38,7 +38,7 @@ The installer isn't code-signed yet, so Windows SmartScreen may say "Windows pro
 Click **More info → Run anyway**.
 
 The desktop app adds:
-- an in-app screen picker with full computer sound on Windows, leaving out Miserecord's own sound so friends never hear themselves; while you share a monitor, Miserecord hides itself from the capture (no mirror effect) and a rainbow frame only you can see marks the shared screen
+- an in-app screen picker with full computer sound on Windows, leaving out Miserecord's own sound so friends never hear themselves; while you share a monitor, Miserecord hides itself from the capture (no mirror effect)
 - its own top bar with the real Windows minimize, maximize and close buttons
 - running in the tray when you close the window, so friends can still call you, and an
   option to start hidden with Windows (Settings → General)
