@@ -324,6 +324,15 @@ function initSettings() {
   applyTheme();
 
   for (const btn of document.querySelectorAll('.settings-btn')) btn.onclick = openSettings;
+  for (const btn of document.querySelectorAll('.theme-btn')) {
+    btn.onclick = () => {
+      const dark = document.documentElement.dataset.theme
+        ? document.documentElement.dataset.theme === 'dark'
+        : matchMedia('(prefers-color-scheme: dark)').matches;
+      setSetting('theme', dark ? 'light' : 'dark');
+      syncTheme();
+    };
+  }
   $('#closeSettings').onclick = closeSettings;
   $('#settings').addEventListener('click', (e) => { if (e.target.id === 'settings') closeSettings(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#settings').hidden) closeSettings(); });

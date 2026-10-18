@@ -133,6 +133,7 @@ function toggleDeafen() {
   label(btn, state.deafened ? 'Hear everyone again' : 'Mute everyone else');
   applyVolumes();
   Log.info('media', state.deafened ? 'muted everyone else' : 'unmuted everyone else');
+  Sfx.play(state.deafened ? 'deafen' : 'undeafen');
 }
 
 function resetDeafen() {
@@ -206,7 +207,7 @@ function onHotkey({ name, down }) {
   if (name === 'ptt') return setPtt(down);
   if (!down) return;
   if (name === 'mute' && state.mic) toggleMute();
-  if (name === 'leave' && state.mode) leave();
+  if (name === 'leave' && state.mode) { Sfx.play('hangup'); leave(); }
   if (name === 'deafen' && state.mode) toggleDeafen();
 }
 

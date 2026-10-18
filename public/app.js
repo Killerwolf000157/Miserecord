@@ -855,6 +855,7 @@ function onConnectionState(peer) {
   const { pc } = peer;
   switch (pc.connectionState) {
     case 'connected':
+      if (!peer.wasConnected) Sfx.play('join');
       peer.wasConnected = true;
       peer.card.classList.remove('waiting');
       peer.card.classList.add('connected');
@@ -985,8 +986,8 @@ function leave() {
   state.mode = null;
   state.codesRole = null;
   renderLobby();
-  stopLocal('screen');
-  stopLocal('media');
+  stopLocal('screen', true);
+  stopLocal('media', true);
   if (state.mic) state.mic.getTracks().forEach((t) => t.stop());
   state.mic = null;
   state.muted = false;
@@ -1111,6 +1112,7 @@ function broadcast(msg) {
 function onPeerGone(peer, reason) {
   if (state.peers.get(peer.id) !== peer) return;
   const who = peer.name || 'Your friend';
+  Sfx.play('leave');
   if (state.mode === 'lobby') {
     removePeer(peer, reason);
     addSystem(`${who} left`);
@@ -1136,7 +1138,7 @@ function onDataMessage(peer, msg) {
         Log.warn('pair', 'could not save friend', err);
         // Two tabs of the same browser share one identity, so they can't save each other.
         if (/own key/.test(err.message)) {
-          toast('These two windows share the same browser data, so they can\'t save each other as friends. Use another browser or a private window for the second one.', 'err');
+          toast('These two windows share the same saved data, so they can\'t save each other as friends. Use a second computer or Windows account for the other one.', 'err');
         }
       });
       break;
@@ -1289,7 +1291,11 @@ function addChat(author, text, mine) {
   const el = messageShell(author, mine, '');
   el.querySelector('.bubble').textContent = text;
   appendMessage(el);
-  if (!mine) noteUnread();
+  if (!mine) {
+    noteUnread();
+    // Only when you might not see it: chat closed or the window in the background.
+    if (!$('#layout').classList.contains('chat-open') || document.hidden) Sfx.play('message');
+  }
 }
 
 function addSystem(text) {
@@ -1430,7 +1436,7 @@ function initControls() {
     e.target.value = '';
     if (f) streamFile(f);
   };
-  $('#hangBtn').onclick = leave;
+  $('#hangBtn').onclick = () => { if (state.mode) Sfx.play('hangup'); leave(); };
 }
 
 function toggleMute() {
@@ -1440,6 +1446,7 @@ function toggleMute() {
   applyMicEnabled(); // also sets the button's label
   $('#meCard .micoff').hidden = !state.muted;
   broadcast({ type: 'mute', muted: state.muted });
+  Sfx.play(state.muted ? 'mute' : 'unmute');
 }
 
 async function toggleScreen() {
@@ -1463,6 +1470,7 @@ async function toggleScreen() {
   state.screen.tile = tile.el;
   addQualityPicker(tile.el);
   publish('screen');
+  Sfx.play('streamStart');
   $('#screenBtn').classList.add('active');
   label($('#screenBtn'), 'Stop sharing');
 }
@@ -1485,7 +1493,7 @@ async function streamFile(file) {
   if (!capture) {
     tile.el.remove();
     URL.revokeObjectURL(url);
-    return toast('This browser cannot stream media files. Try Chrome or Edge.', 'err');
+    return toast('Media file streaming isn\'t supported here. Use the Miserecord app.', 'err');
   }
   // The browser drops captured tracks when a file ends, so we keep one stable
   // stream for everyone and swap in freshly captured tracks on every play.
@@ -1515,6 +1523,7 @@ async function streamFile(file) {
     fresh.addEventListener('addtrack', ({ track }) => useTrack(track));
   };
   publish('media');
+  Sfx.play('streamStart');
   recapture();
   el.addEventListener('playing', recapture);
   $('#mediaBtn').classList.add('active');
@@ -1529,9 +1538,10 @@ function publish(kind) {
   }
 }
 
-function stopLocal(kind) {
+function stopLocal(kind, quiet = false) {
   const s = state[kind];
   if (!s) return;
+  if (!quiet) Sfx.play('streamStop');
   state[kind] = null;
   for (const peer of state.peers.values()) {
     if (peer.pc.signalingState === 'closed') continue;
@@ -1861,6 +1871,7 @@ window.addEventListener('beforeunload', () => broadcast({ type: 'bye' }));
 
 initSettings();
 initExtras();
+initSounds();
 initFocus();
 initJoin();
 initManual();
