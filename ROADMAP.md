@@ -38,10 +38,13 @@ Discord's quality caps and no middleman. Media stays direct peer to peer.
 
 ## 3. Desktop app (Electron)
 
-- [ ] Package the current code as a Windows app (Mac/Linux later if needed)
-- [ ] Launches like a normal program, can stay in the tray to receive calls
-- [ ] Full system audio capture when screen sharing
-- [ ] Custom screen/window picker, tray icon
+- [x] Windows app with installer, Start menu and desktop shortcuts
+- [x] Auto-update from GitHub releases
+- [x] Full system audio when screen sharing, in-app screen/window picker
+- [x] Quiet notification and taskbar flash for incoming calls
+- [ ] Stay in the tray to receive calls when the window is closed
+- [ ] Code-sign the installer (removes the SmartScreen warning)
+- [ ] Mac/Linux builds
 
 ## 4. Later / maybe
 

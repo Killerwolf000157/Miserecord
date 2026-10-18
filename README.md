@@ -16,9 +16,22 @@ Private one-to-one calls in the browser, with nothing to install and no server t
 Audio, video, chat and files travel **directly between the two browsers** over WebRTC,
 encrypted end to end (DTLS-SRTP / DTLS). Nothing relays them.
 
-## Start
+## Install
 
-Open `public/index.html` (double-click it). Chrome or Edge recommended.
+Download **Miserecord-Setup.exe** from the [latest release](https://github.com/Killerwolf000157/Miserecord/releases/latest)
+and run it. It adds Miserecord to the Start menu and desktop, keeps your name, settings and
+friends between launches, and updates itself: new versions download in the background and
+install when you click **Restart to update** (or the next time you quit).
+
+The installer isn't code-signed yet, so Windows SmartScreen may say "Windows protected your PC".
+Click **More info → Run anyway**.
+
+The desktop app adds an in-app screen picker with full computer sound on Windows, and a quiet
+notification when a friend calls while the window is in the background.
+
+### Without installing
+
+Open `public/index.html` in Chrome or Edge. Everything works except the desktop extras.
 
 ### First call with someone new: swap two codes
 
@@ -75,6 +88,27 @@ corporate or mobile networks), a direct connection isn't possible and the call w
 - **Screen-share audio:** Chrome and Edge can share tab audio (and system audio on Windows).
 - **Media file streaming** works best in Chrome and Edge.
 
+## Development
+
+```bash
+npm install
+```
+
+```bash
+npm start
+```
+
+`npm run dist` builds the installer into `dist/`. To publish an update, bump the version and push
+the tag; the GitHub Actions workflow builds the installer and creates the release:
+
+```bash
+npm version patch
+```
+
+```bash
+git push --follow-tags
+```
+
 ## Files
 
 ```
@@ -83,4 +117,9 @@ public/style.css      design system (light and dark)
 public/app.js         calls: WebRTC, media, chat, files, saved-friend calling
 public/settings.js    settings sheet: devices, quality, codecs, theme, network
 public/rendezvous.js  friends, encryption, Nostr relay client, BIP-340 signatures
+public/log.js         connection log (Settings → General → Troubleshooting)
+public/desktop.js     desktop extras: screen picker, update banner
+electron/main.js      desktop app: window, permissions, screen capture, auto-update
+electron/preload.js   the small bridge between the page and the desktop app
+build/make-icon.js    draws the app icon
 ```

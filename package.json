@@ -1,0 +1,62 @@
+{
+  "name": "miserecord",
+  "productName": "Miserecord",
+  "version": "1.0.0",
+  "description": "Private peer-to-peer calls, screen sharing and streaming with your friends.",
+  "author": "Killerwolf000157",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "electron/main.js",
+  "homepage": "https://github.com/Killerwolf000157/Miserecord",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Killerwolf000157/Miserecord.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "icon": "node build/make-icon.js",
+    "dist": "electron-builder --win --publish never",
+    "release": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.killerwolf000157.miserecord",
+    "productName": "Miserecord",
+    "copyright": "Killerwolf000157",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**",
+      "public/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.png",
+      "artifactName": "Miserecord-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Miserecord",
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Killerwolf000157",
+      "repo": "Miserecord",
+      "releaseType": "release"
+    }
+  }
+}

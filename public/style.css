@@ -651,3 +651,40 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
   padding: 12px 14px; border-radius: var(--r-md); background: var(--surface);
   font: 11px/1.55 var(--font-mono); color: var(--text-2); white-space: pre-wrap; word-break: break-word;
 }
+
+/* ---------- desktop app: screen picker & updates ---------- */
+.picker {
+  width: min(100%, 760px); max-height: min(88vh, 720px);
+  display: flex; flex-direction: column;
+  border-radius: 28px; background: var(--bg);
+  box-shadow: inset 0 0 0 .5px var(--line), var(--float-shadow);
+  overflow: hidden; animation: rise .25s ease-out;
+}
+.seg.tabs.two { grid-template-columns: repeat(2, 1fr); max-width: 280px; }
+.picker-grid {
+  flex: 1; overflow-y: auto; padding: 14px 20px;
+  display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); align-content: start;
+}
+.source {
+  display: grid; gap: 8px; padding: 8px; border: 0; border-radius: 18px; cursor: pointer; text-align: left;
+  background: var(--surface); color: var(--text); box-shadow: inset 0 0 0 2px transparent;
+  transition: box-shadow .15s ease, background-color .15s ease;
+}
+.source:hover { background: var(--surface-2); }
+.source.selected { box-shadow: inset 0 0 0 2px var(--focus); }
+.source img.thumb { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; border-radius: 12px; background: #000; display: block; }
+.source .src-name { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; padding: 0 4px 2px; min-width: 0; }
+.source .src-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.source .src-name img { width: 16px; height: 16px; flex: none; }
+.picker-empty { grid-column: 1 / -1; text-align: center; color: var(--text-2); padding: 40px 0; }
+.picker-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 20px 20px; flex-wrap: wrap; }
+.picker-audio { padding: 0; min-height: 0; gap: 12px; }
+.picker-audio .row-label { flex: none; }
+
+.update-bar {
+  position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 30;
+  display: flex; align-items: center; gap: 14px; padding: 8px 8px 8px 18px; border-radius: 999px;
+  background: var(--material); backdrop-filter: saturate(1.8) blur(20px); -webkit-backdrop-filter: saturate(1.8) blur(20px);
+  box-shadow: inset 0 0 0 .5px var(--line), var(--float-shadow);
+  font-size: 14px; font-weight: 500; animation: rise .25s ease-out;
+}

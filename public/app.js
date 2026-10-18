@@ -278,6 +278,7 @@ function showIncoming(friend, sid) {
   $('#incomingTitle').textContent = `${friend.name} is calling`;
   $('#incoming').hidden = false;
   document.title = `${friend.name} is calling · Miserecord`;
+  if (window.miserecordDesktop) window.miserecordDesktop.incomingCall(friend.name);
   // The caller re-sends every few seconds; if that stops, they gave up.
   state.ringIn.watch = setInterval(() => {
     if (state.ringIn && Date.now() - state.ringIn.last > 10000) {
@@ -291,6 +292,7 @@ function hideIncoming() {
   if (state.ringIn) clearInterval(state.ringIn.watch);
   state.ringIn = null;
   $('#incoming').hidden = true;
+  if (window.miserecordDesktop) window.miserecordDesktop.callAnswered();
   document.title = 'Miserecord';
 }
 

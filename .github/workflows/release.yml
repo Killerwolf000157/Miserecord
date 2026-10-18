@@ -1,0 +1,27 @@
+# Builds the Windows installer and publishes it as a GitHub release.
+# Trigger: push a version tag that matches package.json, e.g.
+#   npm version patch   (bumps the version and creates the tag)
+#   git push --follow-tags
+# Installed apps pick up the new release automatically.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
