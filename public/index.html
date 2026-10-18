@@ -132,21 +132,17 @@
 <!-- ============================== Call ============================== -->
 <section id="call" class="screen call" hidden>
   <header class="topbar">
-    <div class="brand-mini">
-      <div class="orb tiny" aria-hidden="true"></div>
-      <span>Miserecord</span>
+    <div class="chip" id="lobbyChip" hidden>
+      <span class="chip-key">Lobby</span><strong id="lobbyCodeChip"></strong>
+      <button type="button" class="chip-btn" id="lobbyCopyChip" title="Copy lobby code" aria-label="Copy lobby code">
+        <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+      </button>
+      <button type="button" class="chip-btn" id="lobbyLock" title="Lock the lobby" aria-label="Lock the lobby" hidden>
+        <svg class="unlocked" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 7.7-1.5"/></svg>
+        <svg class="locked" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+      </button>
     </div>
     <div class="top-right">
-      <div class="chip" id="lobbyChip" hidden>
-        <span class="chip-key">Lobby</span><strong id="lobbyCodeChip"></strong>
-        <button type="button" class="chip-btn" id="lobbyCopyChip" title="Copy lobby code" aria-label="Copy lobby code">
-          <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
-        </button>
-        <button type="button" class="chip-btn" id="lobbyLock" title="Lock the lobby" aria-label="Lock the lobby" hidden>
-          <svg class="unlocked" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 7.7-1.5"/></svg>
-          <svg class="locked" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-        </button>
-      </div>
       <div id="status" class="status wait" role="status" aria-live="polite">
         <span class="dot"></span><span id="statusText">Connecting…</span><span id="statusDetail" class="detail"></span>
       </div>

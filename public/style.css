@@ -255,10 +255,9 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
 .call { height: 100%; display: grid; grid-template-rows: 60px 1fr; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 0 14px 0 22px;
+  padding: 0 14px;
   position: relative; z-index: 2;
 }
-.brand-mini { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 600; font-size: 16px; letter-spacing: -.02em; flex: none; }
 .top-right { display: flex; align-items: center; justify-content: flex-end; gap: 14px; min-width: 0; flex: 1 1 auto; }
 .top-right .status { flex: 0 1 auto; overflow: hidden; }
 
@@ -488,7 +487,7 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
   }
   .person { width: 140px; }
   .link { width: 48px; height: 96px; margin: 0 -22px; }
-  .brand-mini span, .status .detail, #roomKey { display: none; }
+  .status .detail, #roomKey { display: none; }
   .top-right { gap: 8px; }
   .stage { padding: 20px 16px 112px; }
   .people { gap: 32px; }
@@ -795,12 +794,12 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
 .stage-wrap.focus .tile-bar .quality-pick { display: grid; }
 
 /* ---------- very narrow windows (phones, a squeezed window) ---------- */
-.top-right > .chip { flex: 0 1 auto; min-width: 0; }
+.topbar > .chip { flex: 0 1 auto; min-width: 0; }
 @media (max-width: 520px) {
   .topbar { padding: 0 8px 0 14px; gap: 8px; }
   .top-right { gap: 6px; }
   .chip-key, .status #statusText { display: none; }
-  #lobbyCodeChip { max-width: 96px; }
+  #lobbyCodeChip { max-width: 160px; }
   .layout { padding: 0 6px 6px; }
   .stage { padding: 16px 10px 100px; }
   .person, .people.many .person { width: 104px; }
