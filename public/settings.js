@@ -10,14 +10,22 @@ const SETTINGS_DEFAULTS = {
   echo: true,
   noise: true,
   agc: true,
-  voice: 'high',
-  streamAudio: '256',
-  shareRes: 'native',
-  shareFps: '30',
-  videoQuality: 'high',
+  // High by default. These are ceilings: WebRTC lowers the rate on its own when
+  // a connection can't keep up, so a slow line still works.
+  voice: 'veryhigh',    // 128 kbps; mono voice doesn't improve much beyond this
+  streamAudio: '256',   // near-transparent stereo
+  shareRes: '1440',     // sharp text without 4K's upload cost
+  shareFps: '60',
+  videoQuality: 'veryhigh', // up to 20 Mbps, enough for crisp 1440p60
   motion: 'auto',
   codec: 'auto',
 };
+
+// Earlier versions saved their (lower) defaults with every settings change.
+// Values still equal to those old defaults were never picked by hand, so they
+// move up to the new ones. Anything you chose yourself stays.
+const SETTINGS_VERSION = 2;
+const OLD_DEFAULTS = { voice: 'high', shareRes: 'native', shareFps: '30', videoQuality: 'high' };
 
 const VOICE_BITRATE = { standard: 32000, high: 64000, veryhigh: 128000, hifi: 256000 };
 const VIDEO_BITRATE = { auto: null, high: 8e6, veryhigh: 20e6, max: 50e6 };
@@ -27,7 +35,12 @@ const CODEC_NAMES = { 'video/AV1': 'AV1, best quality', 'video/VP9': 'VP9', 'vid
 const settings = (() => {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('miserecord.settings')) || {}; } catch { /* storage off */ }
-  return { ...SETTINGS_DEFAULTS, ...saved };
+  if ((saved.version || 1) < SETTINGS_VERSION) {
+    for (const [key, old] of Object.entries(OLD_DEFAULTS)) {
+      if (saved[key] === old) delete saved[key];
+    }
+  }
+  return { ...SETTINGS_DEFAULTS, ...saved, version: SETTINGS_VERSION };
 })();
 
 function setSetting(key, value) {
