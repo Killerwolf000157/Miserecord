@@ -384,7 +384,7 @@ const Rendezvous = (() => {
   }
 
   return {
-    DEFAULT_RELAYS, identity, pair, friends, touchFriend, removeFriend, Pool,
+    DEFAULT_RELAYS, identity, pair, friends, touchFriend, removeFriend, Pool, keyId,
     newLobbyCode, normalizeLobbyCode, lobbyChannel,
     // exposed for tests
     _test: { schnorrSign, mulG, toHex, fromHex, bytesToBig },

@@ -7,7 +7,8 @@ Private calls with your friends, 1:1 or in groups of up to 8, with no server to 
 - **Media file streaming**: play a local video or song live to your friend
 - **Chat and file transfer** of any size, with image previews
 - **Group lobbies**: create a lobby, share its one code, and anyone with it can join (up to 8 people)
-- **Saved friends**: swap codes once, then just press **Call**
+- **Saved friends**: swap codes once, or press **Add friend** on someone in a lobby (they press Accept), then just press **Call** next time
+- **Right-click** a person or a stream for its volume (0-200%), Add friend, Full screen or Remove
 - **Settings** (gear icon): microphone and speaker, echo cancellation and noise suppression,
   voice quality up to Hi-Fi stereo, streamed audio up to 510 kbps, screen-share resolution
   up to 4K at 60 fps, video bitrate up to 50 Mbps, codec (AV1, VP9, H.264, VP8), and live

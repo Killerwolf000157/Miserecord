@@ -347,15 +347,18 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
 .you { font-size: 13px; font-weight: 500; color: var(--text-3); }
 
 /* compact people row once something is being shared */
-.stage.has-tiles .people { gap: 12px; align-items: center; }
-.stage.has-tiles .person { flex-direction: row; gap: 12px; width: auto; }
-.stage.has-tiles .link { width: 28px; height: 40px; margin: 0; }
-.stage.has-tiles .avatar-wrap { width: 40px; height: 40px; }
-.stage.has-tiles .aura { inset: -6px; filter: blur(8px); }
-.stage.has-tiles .avatar { font-size: 17px; }
-.stage.has-tiles .micoff { width: 18px; height: 18px; right: -4px; bottom: -4px; box-shadow: 0 0 0 2px var(--stage); }
-.stage.has-tiles .micoff svg { width: 11px; height: 11px; }
-.stage.has-tiles .pname { font-size: 15px; }
+/* with a stream on, the people sit in a row under it */
+.stage.has-tiles .hub { order: 2; }
+.stage.has-tiles .tiles { order: 1; }
+.stage.has-tiles .people { gap: 20px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.stage.has-tiles .person { flex-direction: row; gap: 14px; width: auto; }
+.stage.has-tiles .link { width: 40px; height: 64px; margin: 0; }
+.stage.has-tiles .avatar-wrap { width: 64px; height: 64px; }
+.stage.has-tiles .aura { inset: -9px; filter: blur(10px); }
+.stage.has-tiles .avatar { font-size: 26px; }
+.stage.has-tiles .micoff { width: 22px; height: 22px; right: -3px; bottom: -3px; box-shadow: 0 0 0 2px var(--stage); }
+.stage.has-tiles .micoff svg { width: 13px; height: 13px; }
+.stage.has-tiles .pname { font-size: 18px; font-weight: 600; }
 
 /* stream tiles */
 .tiles { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); align-content: start; }
@@ -506,7 +509,7 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
   .stage { padding: 20px 16px 112px; }
   .people { gap: 32px; }
   .avatar-wrap { width: 96px; height: 96px; }
-  .stage.has-tiles .avatar-wrap { width: 40px; height: 40px; }
+  .stage.has-tiles .avatar-wrap { width: 52px; height: 52px; }
   .avatar { font-size: 38px; }
   .tiles { grid-template-columns: 1fr; }
   .dock { gap: 8px; padding: 8px; bottom: 16px; }
@@ -801,8 +804,8 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
 .people.crowd .avatar-wrap { width: 88px; height: 88px; }
 .people.crowd .avatar { font-size: 34px; }
 .stage.has-tiles .people.many .person { width: auto; }
-.stage.has-tiles .people.many .avatar-wrap { width: 40px; height: 40px; }
-.stage.has-tiles .people.many .avatar { font-size: 17px; }
+.stage.has-tiles .people.many .avatar-wrap { width: 56px; height: 56px; }
+.stage.has-tiles .people.many .avatar { font-size: 22px; }
 .stage.has-tiles .kick { display: none; }
 
 /* ---------- first-launch setup ---------- */
@@ -935,3 +938,41 @@ select.native-select { display: none !important; }
 .sp-empty { margin: 0; font-size: 13px; color: var(--text-3); }
 .sp-more { justify-self: start; }
 .ctl.open { background: var(--fill-2); }
+
+/* ---------- add a friend from a lobby ---------- */
+.befriend { display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; min-height: 30px; }
+.befriend .btn.small { height: 30px; padding: 0 12px; font-size: 13px; }
+.befriend-note { font-size: 13px; color: var(--text-2); }
+.person.is-friend .pname::after {
+  content: ""; display: inline-block; width: 14px; height: 14px; margin-left: 6px; vertical-align: -1px;
+  background: conic-gradient(var(--aurora-stops));
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 20.5s-7.5-4.6-7.5-10.3A4.2 4.2 0 0 1 12 7.6a4.2 4.2 0 0 1 7.5 2.6c0 5.7-7.5 10.3-7.5 10.3z'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* ---------- right-click volume menu ---------- */
+.vol-menu {
+  position: fixed; z-index: 40; width: 250px; display: grid; gap: 10px; padding: 14px;
+  border-radius: 18px; background: var(--material); color: var(--text);
+  backdrop-filter: saturate(1.8) blur(24px); -webkit-backdrop-filter: saturate(1.8) blur(24px);
+  box-shadow: inset 0 0 0 .5px var(--line), var(--float-shadow);
+  animation: pick-in .1s ease-out;
+}
+.vm-title { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vm-row { display: flex; justify-content: space-between; font-size: 13px; color: var(--text-2); }
+.vm-pct { font-variant-numeric: tabular-nums; }
+.vm-pct.boost { color: var(--text); font-weight: 600; }
+.vol-menu .slider { width: 100%; }
+.vm-presets { display: flex; gap: 4px; }
+.vm-preset {
+  flex: 1; height: 28px; border: 0; border-radius: 8px; cursor: pointer;
+  background: var(--fill); color: var(--text); font: 500 12px/1 var(--font);
+}
+.vm-preset:hover { background: var(--fill-2); }
+.vm-actions:empty { display: none; }
+.vm-actions { display: grid; gap: 2px; border-top: .5px solid var(--line); padding-top: 8px; }
+.vm-action {
+  text-align: left; height: 32px; padding: 0 8px; border: 0; border-radius: 8px; cursor: pointer;
+  background: transparent; color: var(--text); font: 500 14px/1 var(--font);
+}
+.vm-action:hover { background: var(--fill); }
+.vm-action.danger { color: var(--danger); }

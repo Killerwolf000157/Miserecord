@@ -114,6 +114,7 @@ function openSoundPanel() {
     $(`${id}Pct`).textContent = `${settings[key]}%`;
   }
   renderSoundPeople();
+  renderSoundStreams();
   $('#soundPanel').hidden = false;
   $('#soundBtn').setAttribute('aria-expanded', 'true');
   $('#soundBtn').classList.add('open');
@@ -146,6 +147,29 @@ function renderSoundPeople() {
   }
 }
 
+// One row per stream you're watching, under "Everything you watch".
+function renderSoundStreams() {
+  const box = $('#spStreamList');
+  box.textContent = '';
+  for (const peer of state.peers.values()) {
+    for (const entry of peer.remote.values()) {
+      if (!entry.tile) continue;
+      const row = document.createElement('label');
+      row.className = 'sp-row';
+      row.innerHTML = '<span class="sp-name" translate="no"></span><input type="range" class="slider" min="0" step="1"><span class="sp-pct"></span>';
+      row.querySelector('.sp-name').textContent = entry.tile.el.querySelector('.title').textContent;
+      const input = row.querySelector('input');
+      input.max = MAX_VOLUME;
+      input._entry = entry;
+      input.setAttribute('aria-label', 'Stream volume');
+      syncSlider(input, entry.volume || 100);
+      row.querySelector('.sp-pct').textContent = `${entry.volume || 100}%`;
+      input.oninput = () => setStreamVolume(entry, Number(input.value), input);
+      box.append(row);
+    }
+  }
+}
+
 // A person's voice volume, kept the same on their card and in the sound panel.
 function setPeerVolume(peer, value, from) {
   peer.volume = value;
@@ -165,10 +189,9 @@ function applyVolumes() {
   for (const peer of state.peers.values()) {
     for (const entry of peer.remote.values()) {
       if (entry.audio) Playback.set(entry.audio, voiceVolumeFor(peer));
-      if (entry.tile) Playback.set(entry.tile.video, settings.streamVolume / 100);
+      if (entry.tile) Playback.set(entry.tile.video, (settings.streamVolume / 100) * ((entry.volume || 100) / 100));
     }
   }
-  for (const s of document.querySelectorAll('.tile.remote .tile-vol .slider')) syncSlider(s, settings.streamVolume);
 }
 
 // The filled part of a slider's track follows its value.
@@ -180,22 +203,98 @@ function syncSlider(input, value) {
 }
 
 // A volume slider for a remote stream tile.
-function addTileVolume(tile) {
+// This stream's own volume (0-200%), on top of "Everything you watch".
+function addTileVolume(tile, entry) {
+  entry.volume = entry.volume || 100;
   const wrap = document.createElement('label');
   wrap.className = 'tile-vol';
-  wrap.title = 'Stream volume';
-  wrap.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/></svg><input type="range" class="slider" min="0" max="${MAX_VOLUME}" step="1" aria-label="Stream volume">';
+  wrap.innerHTML = `<svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6"/></svg><input type="range" class="slider" min="0" max="${MAX_VOLUME}" step="1" aria-label="Stream volume">`;
   const input = wrap.querySelector('input');
-  input.oninput = () => {
-    setSetting('streamVolume', Number(input.value));
-    syncSlider(input);
-    wrap.title = `Stream volume ${input.value}%`;
-    applyVolumes();
-  };
-  syncSlider(input, settings.streamVolume);
-  wrap.title = `Stream volume ${settings.streamVolume}%`;
+  input.oninput = () => setStreamVolume(entry, Number(input.value), input);
+  entry.volumeInput = input;
   tile.el.querySelector('.actions').prepend(wrap);
+  setStreamVolume(entry, entry.volume);
+  // Right-click the stream for its volume.
+  tile.el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const focused = tile.el.classList.contains('focused');
+    showVolumeMenu(e, {
+      title: tile.el.querySelector('.title').textContent,
+      value: entry.volume,
+      onChange: (v) => setStreamVolume(entry, v),
+      actions: [{ label: focused ? 'Exit full screen' : 'Full screen', run: () => (focused ? exitFocus() : enterFocus(tile.el)) }],
+    });
+  });
 }
+
+function setStreamVolume(entry, value, from) {
+  entry.volume = value;
+  const input = entry.volumeInput;
+  if (input) {
+    if (input !== from) input.value = value;
+    syncSlider(input);
+    input.parentElement.title = `Stream volume ${value}%`;
+  }
+  for (const s of document.querySelectorAll('#spStreamList input')) {
+    if (s._entry !== entry) continue;
+    if (s !== from) { s.value = value; syncSlider(s); }
+    s.nextElementSibling.textContent = `${value}%`;
+  }
+  applyVolumes();
+}
+
+// ------------------------------------------------------------------ right-click volume menu
+// Right-click a person or a stream: its volume and a few actions, at the pointer.
+let volumeMenu = null;
+
+function showVolumeMenu(e, { title, value, onChange, actions = [] }) {
+  closeVolumeMenu();
+  const menu = document.createElement('div');
+  menu.className = 'vol-menu';
+  menu.setAttribute('role', 'menu');
+  menu.innerHTML = `<div class="vm-title" translate="no"></div>
+    <div class="vm-row"><span class="vm-label">Volume</span><span class="vm-pct"></span></div>
+    <input type="range" class="slider" min="0" max="${MAX_VOLUME}" step="1" aria-label="Volume">
+    <div class="vm-presets"></div><div class="vm-actions"></div>`;
+  menu.querySelector('.vm-title').textContent = title;
+  const input = menu.querySelector('input');
+  const pct = menu.querySelector('.vm-pct');
+  const show = (v) => { input.value = v; syncSlider(input); pct.textContent = `${v}%`; pct.classList.toggle('boost', v > 100); };
+  const set = (v) => { show(v); onChange(v); };
+  input.oninput = () => set(Number(input.value));
+  for (const v of [0, 50, 100, 150, 200]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'vm-preset';
+    b.textContent = `${v}%`;
+    b.onclick = () => set(v);
+    menu.querySelector('.vm-presets').append(b);
+  }
+  for (const a of actions) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = `vm-action${a.danger ? ' danger' : ''}`;
+    b.textContent = a.label;
+    b.onclick = () => { closeVolumeMenu(); a.run(); };
+    menu.querySelector('.vm-actions').append(b);
+  }
+  show(value);
+  // In full screen only the full-screen element is shown, so the menu goes inside it.
+  (document.fullscreenElement || document.body).append(menu);
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - w - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - h - 8))}px`;
+  volumeMenu = menu;
+}
+
+function closeVolumeMenu() {
+  if (volumeMenu) volumeMenu.remove();
+  volumeMenu = null;
+}
+
+document.addEventListener('mousedown', (e) => { if (volumeMenu && !volumeMenu.contains(e.target)) closeVolumeMenu(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeVolumeMenu(); });
+window.addEventListener('blur', closeVolumeMenu);
 
 // ------------------------------------------------------------------ ringtone
 // A soft three-note chime made with Web Audio; nothing to download.

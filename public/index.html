@@ -269,6 +269,7 @@
           <div class="sp-title">Streams and shared screens</div>
           <label class="sp-row"><span class="sp-name">Everything you watch</span>
             <input type="range" class="slider" id="spStreams" min="0" max="200" step="1"><span class="sp-pct" id="spStreamsPct"></span></label>
+          <div id="spStreamList"></div>
         </div>
         <button type="button" class="btn small sp-more" id="spMore">More sound settings</button>
       </div>
@@ -630,6 +631,11 @@
       </button>
     </div>
     <div class="pname"><span class="label"></span></div>
+    <div class="befriend" hidden>
+      <button type="button" class="btn small add-friend">Add friend</button>
+      <span class="befriend-note"></span>
+      <button type="button" class="btn small primary accept-friend" hidden>Accept</button>
+    </div>
     <label class="peer-vol">
       <svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>
       <input type="range" class="slider" min="0" max="200" step="1">

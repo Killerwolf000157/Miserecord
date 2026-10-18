@@ -1032,6 +1032,55 @@ function leave() {
 }
 
 // ===================================================================
+// Friends from a lobby: Add friend on one side, Accept on the other
+// ===================================================================
+const isFriend = (peer) => !!peer.friendId && Rendezvous.friends().some((f) => f.id === peer.friendId);
+
+function renderBefriend(peer) {
+  const box = peer.card && peer.card.querySelector('.befriend');
+  if (!box) return;
+  const show = state.mode === 'lobby' && !!peer.pub && !isFriend(peer);
+  box.hidden = !show;
+  peer.card.classList.toggle('is-friend', state.mode === 'lobby' && isFriend(peer));
+  if (!show) return;
+  const add = box.querySelector('.add-friend');
+  const accept = box.querySelector('.accept-friend');
+  const note = box.querySelector('.befriend-note');
+  add.hidden = peer.asked || peer.theyAsked;
+  accept.hidden = !peer.theyAsked || peer.asked;
+  note.textContent = peer.asked ? 'Request sent' : peer.theyAsked ? 'Wants to be friends' : '';
+  note.hidden = !note.textContent;
+}
+
+function askFriend(peer) {
+  if (!peer.pub || isFriend(peer)) return;
+  peer.asked = true;
+  sendTo(peer, { type: 'friend-request' });
+  if (peer.theyAsked) return acceptFriend(peer);
+  renderBefriend(peer);
+}
+
+function acceptFriend(peer) {
+  peer.asked = true;
+  sendTo(peer, { type: 'friend-accept' });
+  saveFriend(peer).then(() => toast(`${peer.name} is now your friend. Call them anytime from the home screen.`));
+}
+
+async function saveFriend(peer) {
+  try {
+    const { friend } = await Rendezvous.pair(peer.pub, peer.name);
+    Log.info('pair', 'saved friend from a lobby', { friend: friend.id.slice(0, 6) });
+    if (state.pool) state.pool.refreshTopics(true);
+    else startListening();
+    renderFriends();
+  } catch (err) {
+    Log.warn('pair', 'could not save friend', err);
+    if (/own key/.test(err.message)) toast("These two windows share the same saved data, so they can't save each other as friends. Use a second computer or Windows account for the other one.", 'err');
+  }
+  renderBefriend(peer);
+}
+
+// ===================================================================
 // People on the stage
 // ===================================================================
 function makePersonCard(id, name) {
@@ -1052,6 +1101,20 @@ function makePersonCard(id, name) {
     const peer = state.peers.get(id);
     if (peer) setPeerVolume(peer, Number(vol.value), vol);
   };
+  // Right-click someone for their volume (and Add friend or Remove in a lobby).
+  card.addEventListener('contextmenu', (e) => {
+    const peer = state.peers.get(id);
+    if (!peer) return;
+    e.preventDefault();
+    const actions = [];
+    if (state.mode === 'lobby' && peer.pub && !isFriend(peer) && !peer.asked) {
+      actions.push({ label: peer.theyAsked ? 'Accept friend request' : 'Add friend', run: () => (peer.theyAsked ? acceptFriend(peer) : askFriend(peer)) });
+    }
+    if (state.lobby && state.lobby.hostId === state.myId) actions.push({ label: 'Remove from the lobby', danger: true, run: () => kickPeer(peer) });
+    showVolumeMenu(e, { title: peer.name, value: peer.volume, onChange: (v) => setPeerVolume(peer, v), actions });
+  });
+  card.querySelector('.add-friend').onclick = () => { const peer = state.peers.get(id); if (peer) askFriend(peer); };
+  card.querySelector('.accept-friend').onclick = () => { const peer = state.peers.get(id); if (peer) acceptFriend(peer); };
   card.querySelector('.kick').onclick = () => {
     const peer = state.peers.get(id);
     if (peer) kickPeer(peer);
@@ -1095,11 +1158,11 @@ function setupDataChannel(peer, dc) {
     showScreen('call');
     sendTo(peer, { type: 'hello', name: state.name, muted: state.muted });
     // 1:1 calls swap identity keys over this direct, encrypted channel so you
-    // can find each other again later without codes. Lobbies don't.
-    if (state.mode !== 'lobby') {
-      Rendezvous.identity().then((me) => sendTo(peer, { type: 'pair', pub: me.pub, name: state.name }))
-        .catch((err) => console.warn('pairing unavailable', err));
-    }
+    // can find each other again later without codes. In lobbies everyone shares
+    // their public key so the app can tell who's already a friend; saving someone
+    // takes an Add friend on one side and an Accept on the other.
+    Rendezvous.identity().then((me) => sendTo(peer, { type: state.mode === 'lobby' ? 'ident' : 'pair', pub: me.pub, name: state.name }))
+      .catch((err) => console.warn('pairing unavailable', err));
     if (state.lobby && state.lobby.hostId === state.myId) {
       sendTo(peer, { type: 'lobby', hostId: state.myId, locked: state.lobby.locked });
     }
@@ -1150,6 +1213,25 @@ function onPeerGone(peer, reason) {
 
 function onDataMessage(peer, msg) {
   switch (msg.type) {
+    case 'ident':
+      if (msg.pub && msg.pub.kty === 'EC') {
+        peer.pub = msg.pub;
+        Rendezvous.keyId(msg.pub).then((id) => { peer.friendId = id; renderBefriend(peer); }).catch(() => {});
+      }
+      break;
+    case 'friend-request':
+      peer.theyAsked = true;
+      if (peer.asked) acceptFriend(peer);
+      else {
+        renderBefriend(peer);
+        toast(`${peer.name} wants to add you as a friend`);
+        Sfx.play('join');
+      }
+      break;
+    case 'friend-accept':
+      // Only someone you asked can add themselves.
+      if (peer.asked) saveFriend(peer).then(() => toast(`${peer.name} is now your friend. Call them anytime from the home screen.`));
+      break;
     case 'pair':
       if (state.mode === 'lobby') break;
       Rendezvous.pair(msg.pub, peer.name || msg.name).then(({ friend, isNew }) => {
@@ -1662,7 +1744,7 @@ function renderRemoteStream(peer, id) {
     const tile = makeTile({ title, remote: true });
     tile.video.srcObject = stream;
     Playback.route(tile.video, stream);
-    addTileVolume(tile);
+    addTileVolume(tile, entry);
     tile.video.play().catch(() => {});
     entry.tile = tile;
   }
