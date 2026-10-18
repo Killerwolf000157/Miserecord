@@ -2,12 +2,18 @@
 # Trigger: push a version tag that matches package.json, e.g.
 #   npm version patch   (bumps the version and creates the tag)
 #   git push --follow-tags
+# or run it by hand from the Actions tab for an existing tag.
 # Installed apps pick up the new release automatically.
 name: Release
 
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)publish, e.g. v1.2.1'
+        required: true
 
 permissions:
   contents: write
@@ -15,13 +21,30 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run release
+      # Build only. Publishing from electron-builder uploads files in parallel
+      # and can race itself into "release already exists".
+      - run: npm run dist
+      - name: Publish release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          files=(dist/Miserecord-Setup-*.exe dist/Miserecord-Setup-*.exe.blockmap dist/latest.yml)
+          ls -l "${files[@]}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber
+          else
+            gh release create "$TAG" "${files[@]}" --title "Miserecord ${TAG#v}" --generate-notes
+          fi
