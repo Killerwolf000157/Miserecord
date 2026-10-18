@@ -15,7 +15,7 @@ Private calls with your friends, 1:1 or in groups of up to 8, with no server to 
   stats of what's actually being sent and received
 - **Push to talk and shortcuts** (mute, leave), with side mouse buttons supported. In the desktop app they work even while a game is in front
 - **AI noise suppression** (DeepFilterNet3, on by default) that runs on your computer, removes keyboards, fans and hiss and keeps your whole voice
-- **AV1 video** by default, switching to H.264 by itself for the call if a computer can't keep up
+- **H.264 on the graphics card** by default for smooth game streams (AV1 is there too, and drops to H.264 by itself if the computer can't keep up)
 - **Sound panel** (speaker button in the call): your microphone volume, each person's voice and the streams, up to 200%
 - **Zoom into streams**: the magnifier button, or scroll in full screen (Ctrl+scroll on the stage); drag to move, double-click to reset
 - **Mute everyone else** next to Mute: silences every voice and stream you receive

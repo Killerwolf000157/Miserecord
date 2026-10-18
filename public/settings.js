@@ -20,9 +20,11 @@ const SETTINGS_DEFAULTS = {
   shareFps: '60',
   videoQuality: 'veryhigh', // up to 20 Mbps, enough for crisp 1440p60
   motion: 'auto',       // screen shares balanced, videos smooth
-  // AV1 looks best for the bitrate. If it's too heavy for the sender's computer,
-  // the call drops to H.264 by itself (see checkCodecLoad).
-  codec: 'video/AV1',
+  // H.264 is the one codec encoded by the graphics card here (NVIDIA, AMD and Intel
+  // through Windows); AV1, VP9 and VP8 run on the CPU, which can't keep up with a
+  // game at 1440p60. If you pick AV1 and it can't keep up, the call drops to
+  // H.264 by itself (see checkCodecLoad).
+  codec: 'video/H264',
   language: 'auto',     // auto follows Windows; en | fr
   micGain: 100,         // your microphone volume for everyone, 0-200%
 };
@@ -30,7 +32,7 @@ const SETTINGS_DEFAULTS = {
 // Earlier versions saved their (lower) defaults with every settings change.
 // Values still equal to those old defaults were never picked by hand, so they
 // move up to the new ones. Anything you chose yourself stays.
-const SETTINGS_VERSION = 4;
+const SETTINGS_VERSION = 5;
 // Version 4 moved everyone's call quality to the best settings once: AI noise
 // suppression, AV1, balanced streaming, 1440p60. Devices, volumes, keys, theme
 // and language are kept.
@@ -40,7 +42,7 @@ const OLD_DEFAULTS = { voice: 'high', shareRes: 'native', shareFps: '30', videoQ
 const VOICE_BITRATE = { standard: 32000, high: 64000, veryhigh: 128000, hifi: 256000 };
 const VIDEO_BITRATE = { auto: null, low: 2.5e6, high: 8e6, veryhigh: 20e6, max: 50e6 };
 const SHARE_SIZE = { native: null, 2160: [3840, 2160], 1440: [2560, 1440], 1080: [1920, 1080], 720: [1280, 720] };
-const CODEC_NAMES = { 'video/AV1': 'AV1, best quality', 'video/VP9': 'VP9', 'video/H264': 'H.264, uses less power', 'video/VP8': 'VP8, most compatible' };
+const CODEC_NAMES = { 'video/H264': 'H.264, on the graphics card (smoothest)', 'video/AV1': 'AV1, sharpest, heavy on the CPU', 'video/VP9': 'VP9, on the CPU', 'video/VP8': 'VP8, most compatible' };
 
 const settings = (() => {
   let saved = {};
@@ -51,6 +53,9 @@ const settings = (() => {
     }
   }
   if ((saved.version || 1) < 4) for (const key of BEST_QUALITY_KEYS) delete saved[key];
+  // Version 5: AV1 runs on the CPU and dropped game streams to a few fps, so the
+  // codec moves to H.264 (graphics card) once.
+  if ((saved.version || 1) < 5) delete saved.codec;
   // The noise switch became a choice; on, and the earlier AI models, become the new AI.
   if (saved.noise === true || saved.noise === 'strong' || saved.noise === 'strongest') delete saved.noise;
   if (saved.noise === false) saved.noise = 'off';
@@ -150,7 +155,7 @@ function senderKind(peerId, sender) {
 
 // sharp keeps full resolution and drops frames when the line or computer can't
 // keep up (text stays readable, but a game can fall to a few fps); smooth keeps
-// the frame rate; balanced lowers both a little, which suits most screen shares.
+// the frame rate; balanced lowers both a little, which suits games and desktops.
 function motionFor(kind) {
   if (settings.motion !== 'auto') return settings.motion;
   return kind === 'media' ? 'smooth' : 'balanced';
@@ -182,7 +187,9 @@ async function applySendParamsTo(peer) {
       else delete enc0.maxBitrate;
       if (kind === 'screen') enc0.maxFramerate = Number(settings.shareFps);
       const motion = motionFor(kind);
-      if ('contentHint' in track) track.contentHint = motion === 'smooth' ? 'motion' : 'detail';
+      // "detail" puts the encoder in its slides-and-text mode: sharp, but it drops
+      // frames hard on fast motion (a game fell to 3 fps). Only "Keep it sharp" uses it.
+      if ('contentHint' in track) track.contentHint = motion === 'sharp' ? 'detail' : 'motion';
       params.degradationPreference = DEGRADATION[motion] || 'balanced';
     }
     try {
@@ -645,9 +652,9 @@ function stopMicTest(keepButton = false) {
 }
 
 // ---------- AV1 too heavy: fall back to H.264 for this call ----------
-// Every 2 s while you send video: if the encoder is AV1, limited by the CPU and
-// at under half the frame rate for 6 s in a row, everyone in the call switches to
-// H.264 (usually encoded by the graphics card) until the call ends.
+// Every 2 s while you send video: if the encoder is AV1 and sends under half the
+// frame rate while the capture itself keeps up, for 6 s in a row, everyone in the
+// call switches to H.264 (encoded by the graphics card) until the call ends.
 let codecStrain = 0;
 async function checkCodecLoad() {
   if ((!state.screen && !state.media) || state.codecOverride) { codecStrain = 0; return; }
@@ -659,7 +666,10 @@ async function checkCodecLoad() {
       if (r.type !== 'outbound-rtp' || r.kind !== 'video' || !r.frameWidth) return;
       const codec = r.codecId && stats.get(r.codecId);
       const want = state.screen ? Number(settings.shareFps) : 30;
-      if (codec && codec.mimeType === 'video/AV1' && r.qualityLimitationReason === 'cpu' && (r.framesPerSecond || 0) < want / 2) strained = true;
+      const source = r.mediaSourceId && stats.get(r.mediaSourceId);
+      const captured = source && source.framesPerSecond != null ? source.framesPerSecond : want;
+      // A still screen sends few frames on purpose; only count it while frames keep coming in.
+      if (codec && codec.mimeType === 'video/AV1' && captured >= want * 0.5 && (r.framesPerSecond || 0) < Math.min(want, captured) / 2) strained = true;
     });
   }
   codecStrain = strained ? codecStrain + 1 : 0;
@@ -696,9 +706,13 @@ async function logVideoQuality() {
     stats.forEach((r) => {
       if (r.type !== 'outbound-rtp' || r.kind !== 'video' || !r.frameWidth) return;
       const codec = r.codecId && stats.get(r.codecId);
+      // What Windows hands over (capture) against what goes out (fps): a low
+      // capture rate means the capture is the problem, not the encoder or the line.
+      const source = r.mediaSourceId && stats.get(r.mediaSourceId);
       Log.info('stats', 'sending video', {
         peer: peer.id.slice(0, 6),
         size: `${r.frameWidth}x${r.frameHeight}`,
+        captureFps: source && source.framesPerSecond != null ? Math.round(source.framesPerSecond) : null,
         fps: r.framesPerSecond != null ? Math.round(r.framesPerSecond) : null,
         codec: codec ? codec.mimeType.replace('video/', '') : null,
         encoder: r.encoderImplementation || null,

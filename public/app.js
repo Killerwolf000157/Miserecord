@@ -1581,7 +1581,7 @@ async function toggleScreen() {
     audio: audio ? { label: audio.label, restrictOwnAudio: audio.getSettings ? audio.getSettings().restrictOwnAudio : undefined } : 'none',
   });
   if (video) {
-    if ('contentHint' in video) video.contentHint = 'detail';
+    if ('contentHint' in video) video.contentHint = motionFor('screen') === 'sharp' ? 'detail' : 'motion';
     video.addEventListener('ended', () => { if (state.screen && state.screen.stream === stream) stopLocal('screen'); });
   }
   state.screen = { stream, senders: new Map(), label: 'Screen' };

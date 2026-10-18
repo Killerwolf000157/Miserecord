@@ -348,6 +348,13 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
 
 /* compact people row once something is being shared */
 /* with a stream on, the people sit in a row under it */
+/* the stream takes the height that's left: top bar, people row and dock aside */
+.stage.has-tiles { gap: 16px; padding-bottom: 104px; }
+/* centred top to bottom when there is room; auto margins (unlike justify-content)
+   never cut off the top when several streams make the stage scroll */
+.stage.has-tiles .tiles { margin-top: auto; }
+.stage.has-tiles .hub { margin-bottom: auto; }
+.stage.has-tiles .tile video { max-height: max(220px, calc(100vh - 330px)); }
 .stage.has-tiles .hub { order: 2; }
 .stage.has-tiles .tiles { order: 1; }
 .stage.has-tiles .people { gap: 20px; align-items: center; flex-wrap: wrap; justify-content: center; }
