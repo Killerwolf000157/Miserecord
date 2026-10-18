@@ -11,6 +11,9 @@ Private one-to-one calls in the browser, with nothing to install and no server t
   voice quality up to Hi-Fi stereo, streamed audio up to 510 kbps, screen-share resolution
   up to 4K at 60 fps, video bitrate up to 50 Mbps, codec (AV1, VP9, H.264, VP8), and live
   stats of what's actually being sent and received
+- **Push to talk and shortcuts** (mute, leave), with side mouse buttons supported. In the desktop app they work even while a game is in front
+- **Separate volume** for your friend's voice and for streams
+- **Optional soft ringtone** for incoming calls, off by default
 - Light and dark mode
 
 Audio, video, chat and files travel **directly between the two browsers** over WebRTC,
@@ -26,8 +29,12 @@ install when you click **Restart to update** (or the next time you quit).
 The installer isn't code-signed yet, so Windows SmartScreen may say "Windows protected your PC".
 Click **More info → Run anyway**.
 
-The desktop app adds an in-app screen picker with full computer sound on Windows, and a quiet
-notification when a friend calls while the window is in the background.
+The desktop app adds:
+- an in-app screen picker with full computer sound on Windows
+- running in the tray when you close the window, so friends can still call you, and an
+  option to start hidden with Windows (Settings → General)
+- push to talk and shortcuts that work everywhere, even in games
+- a quiet notification when a friend calls while the window is hidden
 
 ### Without installing
 
@@ -118,8 +125,9 @@ public/app.js         calls: WebRTC, media, chat, files, saved-friend calling
 public/settings.js    settings sheet: devices, quality, codecs, theme, network
 public/rendezvous.js  friends, encryption, Nostr relay client, BIP-340 signatures
 public/log.js         connection log (Settings → General → Troubleshooting)
+public/extras.js      volume, ringtone, push to talk and shortcuts
 public/desktop.js     desktop extras: screen picker, update banner
-electron/main.js      desktop app: window, permissions, screen capture, auto-update
+electron/main.js      desktop app: window, tray, permissions, screen capture, global hotkeys, auto-update
 electron/preload.js   the small bridge between the page and the desktop app
 build/make-icon.js    draws the app icon
 ```

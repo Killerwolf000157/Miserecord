@@ -688,3 +688,47 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
   box-shadow: inset 0 0 0 .5px var(--line), var(--float-shadow);
   font-size: 14px; font-weight: 500; animation: rise .25s ease-out;
 }
+
+/* ---------- sliders & key capture ---------- */
+.seg.tabs { grid-template-columns: repeat(5, 1fr); }
+.seg.tabs.two { grid-template-columns: repeat(2, 1fr); }
+.slider {
+  -webkit-appearance: none; appearance: none; flex: 0 1 180px; min-width: 90px; height: 28px; margin: 0;
+  background: transparent; cursor: pointer;
+}
+.slider::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: linear-gradient(90deg, var(--text) var(--fill-pct, 50%), var(--fill-2) var(--fill-pct, 50%)); }
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 22px; height: 22px; margin-top: -9px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .3), 0 0 0 .5px rgba(0, 0, 0, .06);
+}
+.slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--fill-2); }
+.slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--text); }
+.slider::-moz-range-thumb { width: 22px; height: 22px; border: 0; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .3); }
+.row-value.vol { width: 40px; flex: none; }
+
+.keycap {
+  min-width: 86px; height: 32px; padding: 0 12px; border-radius: 8px; cursor: pointer;
+  border: 0; background: var(--fill); color: var(--text);
+  font: 600 13px var(--font); box-shadow: inset 0 -2px 0 var(--fill-2);
+}
+.keycap:hover { background: var(--fill-2); }
+.keycap.empty { color: var(--text-2); font-weight: 500; }
+.keycap.listening { box-shadow: 0 0 0 2px var(--focus); color: var(--focus); }
+.key-clear { width: 30px; height: 30px; }
+.key-clear svg { width: 14px; height: 14px; }
+
+/* push to talk on the dock: dimmed until the key is held */
+.ctl.ptt { box-shadow: inset 0 0 0 1.5px var(--fill-2); }
+.ctl.ptt.talking { background: var(--text); color: var(--bg); }
+
+/* per-stream and voice volume */
+.tile-vol { display: flex; align-items: center; gap: 6px; }
+.tile-vol svg { width: 16px; height: 16px; color: var(--text-2); }
+.tile-vol .slider { flex: 0 1 110px; min-width: 70px; }
+.stage-wrap.focus .tile-bar .actions { display: flex; }
+.stage-wrap.focus .tile-bar .actions .icon-btn { display: none; }
+.peer-vol { display: none; align-items: center; gap: 8px; }
+.peer-vol svg { width: 16px; height: 16px; color: var(--text-2); }
+.peer-vol .slider { flex: 0 1 120px; }
+.hub.live #peerCard .peer-vol { display: flex; }
+.stage.has-tiles .peer-vol { display: none !important; }

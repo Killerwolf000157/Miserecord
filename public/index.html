@@ -157,6 +157,10 @@
               </div>
             </div>
             <div class="pname"><span class="label">Waiting for your friend</span></div>
+            <label class="peer-vol" title="Your friend's voice volume">
+              <svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>
+              <input type="range" class="slider" id="peerVol" min="0" max="100" step="1" aria-label="Your friend's voice volume">
+            </label>
           </div>
         </div>
         <div class="call-meta"><span id="callTimer" class="timer"></span></div>
@@ -257,6 +261,7 @@
       <button type="button" role="tab" data-tab="general" class="active">General</button>
       <button type="button" role="tab" data-tab="audio">Audio</button>
       <button type="button" role="tab" data-tab="video">Video</button>
+      <button type="button" role="tab" data-tab="keys">Keys</button>
       <button type="button" role="tab" data-tab="network">Network</button>
     </div>
 
@@ -282,6 +287,12 @@
         <p class="group-note">Friends and your key are kept only in this browser. Removing them means swapping codes again.</p>
 
         <div id="sAbout" hidden>
+          <h3 class="group-title">Running in the background</h3>
+          <div class="group">
+            <label class="row"><span class="row-label">Keep running when closed</span><input type="checkbox" class="switch" id="sBackground"></label>
+            <label class="row"><span class="row-label">Start with Windows</span><input type="checkbox" class="switch" id="sAutostart"></label>
+          </div>
+          <p class="group-note" id="sBackgroundNote">Friends can only call you while Miserecord is running. Closing the window keeps it in the tray, near the clock. Starting with Windows opens it hidden there.</p>
           <h3 class="group-title">App</h3>
           <div class="group">
             <div class="row"><span class="row-label">Version</span><span class="row-value" id="sVersion"></span></div>
@@ -333,6 +344,23 @@
             </select></label>
         </div>
         <p class="group-note">Hi-Fi turns off echo cancellation and noise suppression so music and voices sound natural. Use headphones with it.</p>
+
+        <h3 class="group-title">Volume</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Your friend's voice</span>
+            <input type="range" class="slider" id="sVoiceVol" min="0" max="100" step="1"><span class="row-value vol" id="sVoiceVolText"></span></label>
+          <label class="row"><span class="row-label">Streams and shared screens</span>
+            <input type="range" class="slider" id="sStreamVol" min="0" max="100" step="1"><span class="row-value vol" id="sStreamVolText"></span></label>
+        </div>
+
+        <h3 class="group-title">Ringtone</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Play a ringtone for incoming calls</span><input type="checkbox" class="switch" id="sRing"></label>
+          <div class="row"><span class="row-label">Ringtone volume</span>
+            <input type="range" class="slider" id="sRingVol" min="5" max="100" step="1">
+            <button type="button" class="btn small" id="sRingTest">Play</button></div>
+        </div>
+        <p class="group-note">A soft chime that repeats while a friend is calling. Off by default.</p>
 
         <h3 class="group-title">Output</h3>
         <div class="group">
@@ -386,6 +414,28 @@
         </div>
       </section>
 
+      <!-- Keys -->
+      <section data-panel="keys" hidden>
+        <h3 class="group-title">Push to talk</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Use push to talk</span><input type="checkbox" class="switch" id="sPtt"></label>
+          <div class="row"><span class="row-label">Talk key</span>
+            <button type="button" class="keycap" id="sPttKey" data-binding="pttKey"></button></div>
+        </div>
+        <p class="group-note">Your microphone only sends while you hold the key. Side mouse buttons work too.</p>
+
+        <h3 class="group-title">Shortcuts</h3>
+        <div class="group">
+          <div class="row"><span class="row-label">Mute and unmute</span>
+            <button type="button" class="keycap" id="sMuteKey" data-binding="muteKey"></button>
+            <button type="button" class="icon-btn key-clear" data-clear="muteKey" title="Remove shortcut" aria-label="Remove mute shortcut"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+          <div class="row"><span class="row-label">Leave call</span>
+            <button type="button" class="keycap" id="sLeaveKey" data-binding="leaveKey"></button>
+            <button type="button" class="icon-btn key-clear" data-clear="leaveKey" title="Remove shortcut" aria-label="Remove leave shortcut"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+        </div>
+        <p class="group-note" id="sKeysNote"></p>
+      </section>
+
       <!-- Network -->
       <section data-panel="network" hidden>
         <h3 class="group-title">STUN servers</h3>
@@ -437,6 +487,7 @@
 <script src="log.js"></script>
 <script src="rendezvous.js"></script>
 <script src="settings.js"></script>
+<script src="extras.js"></script>
 <script src="app.js"></script>
 <script src="desktop.js"></script>
 </body>

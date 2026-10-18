@@ -216,13 +216,13 @@ async function restartMic() {
     return;
   }
   const track = stream.getAudioTracks()[0];
-  track.enabled = !state.muted;
   const old = state.mic;
   const sender = state.pc && old && state.pc.getSenders().find((s) => s.track && old.getAudioTracks().includes(s.track));
   if (sender) await sender.replaceTrack(track);
   else if (state.pc) state.pc.addTrack(track, stream);
   if (old) old.getTracks().forEach((t) => t.stop());
   state.mic = stream;
+  applyMicEnabled();
   $('#micBtn').disabled = false;
   attachMeter($('#meCard'), stream);
   applySendParams();
@@ -416,6 +416,7 @@ function openSettings() {
   $('#sQuality').value = settings.videoQuality;
   $('#sMotion').value = settings.motion;
   $('#sCodec').value = settings.codec;
+  syncExtras();
   const canPickSpeaker = typeof HTMLMediaElement.prototype.setSinkId === 'function';
   $('#sSpeaker').disabled = !canPickSpeaker;
   $('#sSpeakerNote').hidden = canPickSpeaker;

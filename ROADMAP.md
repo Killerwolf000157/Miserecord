@@ -42,7 +42,9 @@ Discord's quality caps and no middleman. Media stays direct peer to peer.
 - [x] Auto-update from GitHub releases
 - [x] Full system audio when screen sharing, in-app screen/window picker
 - [x] Quiet notification and taskbar flash for incoming calls
-- [ ] Stay in the tray to receive calls when the window is closed
+- [x] Stay in the tray to receive calls when the window is closed, start with Windows
+- [x] Push to talk and global shortcuts (work in games)
+- [x] Separate voice and stream volume, optional soft ringtone
 - [ ] Code-sign the installer (removes the SmartScreen warning)
 - [ ] Mac/Linux builds
 

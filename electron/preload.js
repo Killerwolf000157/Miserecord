@@ -25,4 +25,14 @@ contextBridge.exposeInMainWorld('miserecordDesktop', {
   // Calls
   incomingCall: (name) => ipcRenderer.send('incoming-call', String(name || '')),
   callAnswered: () => ipcRenderer.send('call-answered'),
+
+  // Background mode and starting with Windows
+  prefs: () => ipcRenderer.invoke('desktop-prefs'),
+  setPref: (key, value) => ipcRenderer.invoke('set-desktop-pref', String(key), !!value),
+
+  // Global hotkeys: bindings go to the main process, presses come back.
+  setHotkeys: (bindings) => ipcRenderer.send('set-hotkeys', bindings),
+  onHotkey(callback) {
+    ipcRenderer.on('hotkey', (_e, event) => callback(event));
+  },
 });

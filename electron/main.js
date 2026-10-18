@@ -5,17 +5,25 @@
 // - Grants microphone and screen-capture permissions to the app itself.
 // - Replaces the browser's screen picker with an in-app picker, including
 //   full system audio on Windows.
+// - Keeps running in the tray when the window is closed, so calls still reach
+//   you, and can start hidden with Windows.
+// - Global hotkeys and push-to-talk that work while other apps (games) are focused.
 // - Checks GitHub Releases for updates, downloads them in the background and
 //   installs on restart.
 'use strict';
 
-const { app, BrowserWindow, Notification, desktopCapturer, ipcMain, nativeTheme, net, protocol, session, shell } = require('electron');
+const {
+  app, BrowserWindow, Menu, Notification, Tray, desktopCapturer, ipcMain, nativeImage, nativeTheme, net, protocol, session, shell,
+} = require('electron');
+const fs = require('fs');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
+const ICON = path.join(__dirname, '..', 'build', 'icon.png');
 const APP_ORIGIN = 'app://miserecord';
 const UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
+const START_HIDDEN = process.argv.includes('--hidden');
 // Only the app's own files run; the network is limited to relays (wss).
 const CSP = [
   "default-src 'self'",
@@ -33,26 +41,51 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
 ]);
 
-// One window only: opening the app again focuses the running one.
+let mainWindow = null;
+let tray = null;
+let quitting = false;
+
+// One window only: opening the app again brings back the running one.
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
-  });
+  app.on('second-instance', showWindow);
   app.whenReady().then(start);
 }
 
+app.on('before-quit', () => { quitting = true; });
 app.on('window-all-closed', () => app.quit());
 
-let mainWindow = null;
+// ---------------------------------------------------------------- desktop preferences
+// Kept in a file because the main process needs them before the page loads.
+const PREFS_FILE = () => path.join(app.getPath('userData'), 'desktop-prefs.json');
+const prefs = { background: true, autostart: false, toldAboutTray: false };
 
+function loadPrefs() {
+  try { Object.assign(prefs, JSON.parse(fs.readFileSync(PREFS_FILE(), 'utf8'))); } catch { /* first run */ }
+}
+function savePrefs() {
+  try { fs.writeFileSync(PREFS_FILE(), JSON.stringify(prefs, null, 2)); } catch (err) { console.error('could not save prefs', err); }
+}
+
+function setAutostart(on) {
+  prefs.autostart = !!on;
+  savePrefs();
+  // Only the installed app registers itself; a development run would register electron.exe.
+  if (app.isPackaged) app.setLoginItemSettings({ openAtLogin: prefs.autostart, path: process.execPath, args: ['--hidden'] });
+  refreshTray();
+}
+
+function setBackground(on) {
+  prefs.background = !!on;
+  savePrefs();
+  refreshTray();
+}
+
+// ---------------------------------------------------------------- startup
 function start() {
   app.setAppUserModelId('com.killerwolf000157.miserecord');
+  loadPrefs();
 
   protocol.handle('app', async (request) => {
     const url = new URL(request.url);
@@ -69,11 +102,27 @@ function start() {
   setupPermissions(session.defaultSession);
   setupScreenPicker(session.defaultSession);
   createWindow();
+  createTray();
   setupUpdates();
+  setupHotkeys();
 
   ipcMain.handle('app-info', () => ({ version: app.getVersion(), packaged: app.isPackaged }));
+  ipcMain.handle('desktop-prefs', () => ({
+    background: prefs.background,
+    autostart: prefs.autostart,
+    canAutostart: app.isPackaged,
+    globalHotkeys: hotkeys.available,
+  }));
+  ipcMain.handle('set-desktop-pref', (_e, key, value) => {
+    if (key === 'background') setBackground(value);
+    if (key === 'autostart') setAutostart(value);
+    return true;
+  });
   ipcMain.on('incoming-call', (_e, name) => notifyIncoming(String(name || 'Your friend').slice(0, 32)));
-  ipcMain.on('call-answered', () => { if (mainWindow) mainWindow.flashFrame(false); });
+  ipcMain.on('call-answered', () => {
+    if (mainWindow) mainWindow.flashFrame(false);
+    if (callNotification) callNotification.close();
+  });
 }
 
 function createWindow() {
@@ -83,7 +132,7 @@ function createWindow() {
     minWidth: 380,
     minHeight: 560,
     title: 'Miserecord',
-    icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    icon: ICON,
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#000000' : '#F5F5F7',
     autoHideMenuBar: true,
     show: false,
@@ -93,13 +142,31 @@ function createWindow() {
       sandbox: true,
       nodeIntegration: false,
       spellcheck: true,
-      // Calls keep working while the window is in the background.
+      // Calls, ringing and hotkeys keep working while the window is hidden.
       backgroundThrottling: false,
+      // The ringtone and your friend's voice can play without a click first.
+      autoplayPolicy: 'no-user-gesture-required',
     },
   });
   mainWindow.removeMenu();
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.once('ready-to-show', () => { if (!START_HIDDEN) mainWindow.show(); });
   mainWindow.loadURL(`${APP_ORIGIN}/`);
+
+  // Closing the window keeps Miserecord running in the tray, unless turned off.
+  mainWindow.on('close', (e) => {
+    if (quitting || !prefs.background) return;
+    e.preventDefault();
+    mainWindow.hide();
+    if (!prefs.toldAboutTray && Notification.isSupported()) {
+      prefs.toldAboutTray = true;
+      savePrefs();
+      new Notification({
+        title: 'Miserecord is still running',
+        body: 'Friends can still call you. Quit from the tray icon, or turn this off in Settings.',
+        silent: true,
+      }).show();
+    }
+  });
   mainWindow.on('closed', () => { mainWindow = null; });
 
   // Links open in the real browser; the app never navigates away from itself.
@@ -112,6 +179,35 @@ function createWindow() {
   });
 }
 
+function showWindow() {
+  if (!mainWindow) createWindow();
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+// ---------------------------------------------------------------- tray
+function createTray() {
+  const image = nativeImage.createFromPath(ICON).resize({ width: 16, height: 16, quality: 'best' });
+  tray = new Tray(image);
+  tray.setToolTip('Miserecord');
+  tray.on('click', showWindow);
+  refreshTray();
+}
+
+function refreshTray() {
+  if (!tray) return;
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open Miserecord', click: showWindow },
+    { type: 'separator' },
+    { label: 'Start with Windows', type: 'checkbox', checked: prefs.autostart, enabled: app.isPackaged, click: (item) => setAutostart(item.checked) },
+    { label: 'Keep running when closed', type: 'checkbox', checked: prefs.background, click: (item) => setBackground(item.checked) },
+    { type: 'separator' },
+    { label: 'Quit Miserecord', click: () => { quitting = true; app.quit(); } },
+  ]));
+}
+
+// ---------------------------------------------------------------- permissions
 function fromApp(webContentsOrOrigin) {
   const origin = typeof webContentsOrOrigin === 'string' ? webContentsOrOrigin : webContentsOrOrigin && webContentsOrOrigin.getURL();
   return !!origin && origin.startsWith(APP_ORIGIN);
@@ -162,16 +258,89 @@ let callNotification = null;
 
 function notifyIncoming(name) {
   if (!mainWindow) return;
-  if (!mainWindow.isFocused()) mainWindow.flashFrame(true);
-  if (mainWindow.isFocused() || !Notification.isSupported()) return;
+  const visible = mainWindow.isVisible() && mainWindow.isFocused();
+  if (mainWindow.isVisible() && !mainWindow.isFocused()) mainWindow.flashFrame(true);
+  if (visible || !Notification.isSupported()) return;
   if (callNotification) callNotification.close();
   callNotification = new Notification({ title: `${name} is calling`, body: 'Click to open Miserecord and answer.', silent: true });
-  callNotification.on('click', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  });
+  callNotification.on('click', showWindow);
   callNotification.show();
+}
+
+// ---------------------------------------------------------------- global hotkeys
+// A low-level hook sees keys while games or other apps are focused. It only
+// runs while at least one hotkey is set, and only reports the bound keys.
+const hotkeys = { available: false, hook: null, keys: null, bindings: {}, held: new Set(), running: false };
+
+function setupHotkeys() {
+  try {
+    const { uIOhook, UiohookKey } = require('uiohook-napi');
+    hotkeys.hook = uIOhook;
+    hotkeys.keys = UiohookKey;
+    hotkeys.available = true;
+  } catch (err) {
+    console.error('global hotkeys unavailable', err);
+    return;
+  }
+  const { hook } = hotkeys;
+  hook.on('keydown', (e) => onHookInput('key', e.keycode, true, e));
+  hook.on('keyup', (e) => onHookInput('key', e.keycode, false, e));
+  hook.on('mousedown', (e) => onHookInput('mouse', e.button, true, e));
+  hook.on('mouseup', (e) => onHookInput('mouse', e.button, false, e));
+  ipcMain.on('set-hotkeys', (_e, bindings) => setHotkeys(bindings));
+  app.on('will-quit', () => { if (hotkeys.running) hotkeys.hook.stop(); });
+}
+
+// DOM KeyboardEvent.code -> uiohook key name.
+const CODE_ALIASES = {
+  ControlLeft: 'Ctrl', ControlRight: 'CtrlRight', ShiftLeft: 'Shift', ShiftRight: 'ShiftRight',
+  AltLeft: 'Alt', AltRight: 'AltRight', MetaLeft: 'Meta', MetaRight: 'MetaRight',
+};
+// DOM mouse button -> uiohook mouse button (middle, back, forward).
+const MOUSE_ALIASES = { 1: 3, 3: 4, 4: 5 };
+
+function toHookBinding(b) {
+  if (!b) return null;
+  if (b.type === 'mouse') return MOUSE_ALIASES[b.button] ? { type: 'mouse', id: MOUSE_ALIASES[b.button] } : null;
+  const name = CODE_ALIASES[b.code] || b.code.replace(/^Key/, '').replace(/^Digit/, '');
+  const id = hotkeys.keys[name];
+  if (id === undefined) return null;
+  return { type: 'key', id, ctrl: !!b.ctrl, shift: !!b.shift, alt: !!b.alt, meta: !!b.meta };
+}
+
+function setHotkeys(bindings) {
+  hotkeys.bindings = {};
+  hotkeys.held.clear();
+  for (const [name, b] of Object.entries(bindings || {})) {
+    const hb = toHookBinding(b);
+    if (hb) hotkeys.bindings[name] = hb;
+  }
+  const want = Object.keys(hotkeys.bindings).length > 0;
+  if (want && !hotkeys.running) { hotkeys.hook.start(); hotkeys.running = true; }
+  if (!want && hotkeys.running) { hotkeys.hook.stop(); hotkeys.running = false; }
+}
+
+function onHookInput(type, id, down, e) {
+  for (const [name, b] of Object.entries(hotkeys.bindings)) {
+    if (b.type !== type || b.id !== id) continue;
+    if (name === 'ptt') {
+      // Push-to-talk: the key alone counts, whatever else is held (e.g. Shift while running).
+      if (down === hotkeys.held.has(name)) continue; // ignore key repeat
+      if (down) hotkeys.held.add(name); else hotkeys.held.delete(name);
+      send('hotkey', { name, down });
+      continue;
+    }
+    // Other hotkeys fire once per press and need their exact modifiers.
+    if (!down) { hotkeys.held.delete(name); continue; }
+    if (hotkeys.held.has(name)) continue;
+    if (type === 'key' && (b.ctrl !== !!e.ctrlKey || b.shift !== !!e.shiftKey || b.alt !== !!e.altKey || b.meta !== !!e.metaKey)) continue;
+    hotkeys.held.add(name);
+    send('hotkey', { name, down: true });
+  }
+}
+
+function send(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 }
 
 // ---------------------------------------------------------------- updates
@@ -180,16 +349,16 @@ function setupUpdates() {
   const { autoUpdater } = require('electron-updater');
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-  const send = (status, extra = {}) => { if (mainWindow) mainWindow.webContents.send('update-status', { status, ...extra }); };
-  autoUpdater.on('checking-for-update', () => send('checking'));
-  autoUpdater.on('update-available', (info) => send('downloading', { version: info.version }));
-  autoUpdater.on('update-not-available', () => send('current'));
-  autoUpdater.on('download-progress', (p) => send('downloading', { percent: Math.round(p.percent) }));
-  autoUpdater.on('update-downloaded', (info) => send('ready', { version: info.version }));
-  autoUpdater.on('error', (err) => send('error', { message: err ? String(err.message).split('\n')[0].slice(0, 200) : 'unknown error' }));
+  const status = (s, extra = {}) => send('update-status', { status: s, ...extra });
+  autoUpdater.on('checking-for-update', () => status('checking'));
+  autoUpdater.on('update-available', (info) => status('downloading', { version: info.version }));
+  autoUpdater.on('update-not-available', () => status('current'));
+  autoUpdater.on('download-progress', (p) => status('downloading', { percent: Math.round(p.percent) }));
+  autoUpdater.on('update-downloaded', (info) => status('ready', { version: info.version }));
+  autoUpdater.on('error', (err) => status('error', { message: err ? String(err.message).split('\n')[0].slice(0, 200) : 'unknown error' }));
 
   ipcMain.on('check-for-updates', () => autoUpdater.checkForUpdates().catch(() => {}));
-  ipcMain.on('install-update', () => autoUpdater.quitAndInstall(false, true));
+  ipcMain.on('install-update', () => { quitting = true; autoUpdater.quitAndInstall(false, true); });
 
   const check = () => autoUpdater.checkForUpdates().catch(() => {});
   setTimeout(check, 5000);

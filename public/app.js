@@ -84,6 +84,7 @@ async function prepare() {
     const t = state.mic.getAudioTracks()[0];
     Log.info('media', 'microphone ready', { ms: Date.now() - askedAt, label: t ? (t.label ? 'named device' : 'unnamed') : 'no track', settings: t && t.getSettings ? (({ sampleRate, channelCount, echoCancellation, noiseSuppression }) => ({ sampleRate, channelCount, echoCancellation, noiseSuppression }))(t.getSettings()) : null });
     attachMeter($('#meCard'), state.mic);
+    applyMicEnabled();
   } catch (err) {
     Log.warn('media', 'microphone unavailable', { ms: Date.now() - askedAt, error: `${err.name}: ${err.message}` });
     toast("No microphone access. You can still listen, chat and share.", 'err');
@@ -279,6 +280,7 @@ function showIncoming(friend, sid) {
   $('#incoming').hidden = false;
   document.title = `${friend.name} is calling · Miserecord`;
   if (window.miserecordDesktop) window.miserecordDesktop.incomingCall(friend.name);
+  Ringtone.start();
   // The caller re-sends every few seconds; if that stops, they gave up.
   state.ringIn.watch = setInterval(() => {
     if (state.ringIn && Date.now() - state.ringIn.last > 10000) {
@@ -292,6 +294,7 @@ function hideIncoming() {
   if (state.ringIn) clearInterval(state.ringIn.watch);
   state.ringIn = null;
   $('#incoming').hidden = true;
+  Ringtone.stop();
   if (window.miserecordDesktop) window.miserecordDesktop.callAnswered();
   document.title = 'Miserecord';
 }
@@ -1065,9 +1068,8 @@ function initControls() {
 function toggleMute() {
   if (!state.mic) return;
   state.muted = !state.muted;
-  state.mic.getAudioTracks().forEach((t) => { t.enabled = !state.muted; });
   $('#micBtn').classList.toggle('muted', state.muted);
-  label($('#micBtn'), state.muted ? 'Unmute' : 'Mute');
+  applyMicEnabled(); // also sets the button's label
   $('#meCard .micoff').hidden = !state.muted;
   sendDC({ type: 'mute', muted: state.muted });
 }
@@ -1209,6 +1211,7 @@ function renderRemoteStream(id) {
       entry.audio.autoplay = true;
       entry.audio.srcObject = stream;
       applySpeaker(entry.audio);
+      entry.audio.volume = settings.voiceVolume / 100;
       entry.audio.play().catch(() => toast('Click anywhere to enable call audio.'));
       refreshPeerMeter();
     }
@@ -1226,6 +1229,7 @@ function renderRemoteStream(id) {
     const tile = makeTile({ title, remote: true });
     tile.video.srcObject = stream;
     applySpeaker(tile.video);
+    addTileVolume(tile);
     tile.video.play().catch(() => {});
     entry.tile = tile;
   }
@@ -1473,6 +1477,7 @@ document.addEventListener('click', () => {
 window.addEventListener('beforeunload', () => sendDC({ type: 'bye' }));
 
 initSettings();
+initExtras();
 initFocus();
 initJoin();
 initManual();

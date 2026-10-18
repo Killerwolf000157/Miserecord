@@ -1,7 +1,7 @@
 {
   "name": "miserecord",
   "productName": "Miserecord",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Private peer-to-peer calls, screen sharing and streaming with your friends.",
   "author": "Killerwolf000157",
   "license": "UNLICENSED",
@@ -19,7 +19,8 @@
     "release": "electron-builder --win --publish always"
   },
   "dependencies": {
-    "electron-updater": "6.8.9"
+    "electron-updater": "6.8.9",
+    "uiohook-napi": "1.5.5"
   },
   "devDependencies": {
     "electron": "44.9.0",
@@ -27,6 +28,7 @@
   },
   "build": {
     "appId": "com.killerwolf000157.miserecord",
+    "npmRebuild": false,
     "productName": "Miserecord",
     "copyright": "Killerwolf000157",
     "directories": {
@@ -36,6 +38,7 @@
     "files": [
       "electron/**",
       "public/**",
+      "build/icon.png",
       "package.json"
     ],
     "win": {
