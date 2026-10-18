@@ -222,7 +222,10 @@ function addTileVolume(tile, entry) {
       title: tile.el.querySelector('.title').textContent,
       value: entry.volume,
       onChange: (v) => setStreamVolume(entry, v),
-      actions: [{ label: focused ? 'Exit full screen' : 'Full screen', run: () => (focused ? exitFocus() : enterFocus(tile.el)) }],
+      actions: [
+        { label: tile.el.querySelector('.stream-info') ? 'Hide stream info' : 'Stream info', run: () => toggleStreamInfo(tile.el) },
+        { label: focused ? 'Exit full screen' : 'Full screen', run: () => (focused ? exitFocus() : enterFocus(tile.el)) },
+      ],
     });
   });
 }
@@ -257,12 +260,14 @@ function showVolumeMenu(e, { title, value, onChange, actions = [] }) {
     <input type="range" class="slider" min="0" max="${MAX_VOLUME}" step="1" aria-label="Volume">
     <div class="vm-presets"></div><div class="vm-actions"></div>`;
   menu.querySelector('.vm-title').textContent = title;
+  // Your own stream has no volume here: only its actions.
+  if (value == null) for (const el of menu.querySelectorAll('.vm-row, .slider, .vm-presets')) el.remove();
   const input = menu.querySelector('input');
   const pct = menu.querySelector('.vm-pct');
   const show = (v) => { input.value = v; syncSlider(input); pct.textContent = `${v}%`; pct.classList.toggle('boost', v > 100); };
   const set = (v) => { show(v); onChange(v); };
-  input.oninput = () => set(Number(input.value));
-  for (const v of [0, 50, 100, 150, 200]) {
+  if (input) input.oninput = () => set(Number(input.value));
+  for (const v of value == null ? [] : [0, 50, 100, 150, 200]) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'vm-preset';
@@ -278,7 +283,7 @@ function showVolumeMenu(e, { title, value, onChange, actions = [] }) {
     b.onclick = () => { closeVolumeMenu(); a.run(); };
     menu.querySelector('.vm-actions').append(b);
   }
-  show(value);
+  if (value != null) show(value);
   // In full screen only the full-screen element is shown, so the menu goes inside it.
   (document.fullscreenElement || document.body).append(menu);
   const w = menu.offsetWidth, h = menu.offsetHeight;

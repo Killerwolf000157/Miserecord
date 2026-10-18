@@ -27,6 +27,7 @@ const SETTINGS_DEFAULTS = {
   codec: 'video/H264',
   language: 'auto',     // auto follows Windows; en | fr
   micGain: 100,         // your microphone volume for everyone, 0-200%
+  adaptive: true,       // smart streaming: start where this computer can, step down when it struggles
 };
 
 // Earlier versions saved their (lower) defaults with every settings change.
@@ -186,7 +187,7 @@ async function applySendParamsTo(peer) {
       const bitrate = VIDEO_BITRATE[settings.videoQuality];
       if (bitrate) enc0.maxBitrate = bitrate;
       else delete enc0.maxBitrate;
-      if (kind === 'screen') enc0.maxFramerate = Number(settings.shareFps);
+      if (kind === 'screen') enc0.maxFramerate = Adapt.fps();
       const motion = motionFor(kind);
       // "detail" puts the encoder in its slides-and-text mode: sharp, but it drops
       // frames hard on fast motion (a game fell to 3 fps). Only "Keep it sharp" uses it.
@@ -363,11 +364,10 @@ function onSettingChanged(key) {
       break;
     case 'shareRes':
     case 'shareFps':
-      if (state.screen) {
-        const v = state.screen.stream.getVideoTracks()[0];
-        if (v) v.applyConstraints(shareVideoConstraints()).catch((err) => toast(`Couldn't change the shared screen: ${err.message}`, 'err'));
-      }
-      applySendParams();
+    case 'adaptive':
+      // Smart streaming starts again from your choice.
+      if (state.screen) Adapt.reset();
+      else applySendParams();
       break;
     case 'speakerId':
       for (const el of allRemoteMediaElements()) applySpeaker(el);
@@ -473,6 +473,7 @@ function initSettings() {
   bindSelect('#sQuality', 'videoQuality');
   bindSelect('#sMotion', 'motion');
   bindSelect('#sCodec', 'codec');
+  bindSwitch('#sAdaptive', 'adaptive');
   const codecs = supportedVideoCodecs();
   $('#sCodec').innerHTML = '';
   $('#sCodec').append(new Option('Automatic', 'auto'));
@@ -533,6 +534,8 @@ function openSettings() {
   $('#sQuality').value = settings.videoQuality;
   $('#sMotion').value = settings.motion;
   $('#sCodec').value = settings.codec;
+  $('#sAdaptive').checked = settings.adaptive;
+  syncSpecs();
   syncExtras();
   const canPickSpeaker = typeof HTMLMediaElement.prototype.setSinkId === 'function';
   $('#sSpeaker').disabled = !canPickSpeaker;
@@ -569,6 +572,16 @@ function showTab(name) {
 
 function syncTheme() {
   for (const b of document.querySelectorAll('#sTheme button')) b.classList.toggle('active', b.dataset.value === settings.theme);
+}
+
+// "This computer" in Settings > Video: what the specs scan found and where a share starts.
+function syncSpecs() {
+  const info = Specs.info;
+  const el = $('#sSpecs');
+  if (!info) { el.textContent = window.miserecordDesktop ? '…' : ''; el.closest('.row').hidden = !window.miserecordDesktop; return; }
+  const gpu = Specs.discrete() || info.gpus.find((g) => g.active) || info.gpus[0];
+  el.textContent = [gpu && gpu.name, `${info.threads} threads`, `${info.ramGB} GB`].filter(Boolean).join(' · ');
+  el.title = I18n.t('Screen shares start at {0}', levelName(Math.max(ceilingLevel(), info.start)));
 }
 
 function syncGeneral() {

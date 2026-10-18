@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('miserecordDesktop', {
   },
   // The page tells us when a screen share stops: captures see the app again.
   shareEnded: () => ipcRenderer.send('share-ended'),
+  setStreaming: (on) => ipcRenderer.send('streaming', !!on), // while you share or stream a file
+  systemInfo: () => ipcRenderer.invoke('system-info'),
   pickSource(requestId, sourceId, audio) {
     ipcRenderer.send(`source-picked-${Number(requestId)}`, sourceId ? { sourceId: String(sourceId), audio: !!audio } : null);
   },

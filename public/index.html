@@ -495,6 +495,13 @@
             </select></label>
           <label class="row"><span class="row-label">Codec</span><select id="sCodec"></select></label>
         </div>
+
+        <h3 class="group-title">Smart streaming</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Adjust automatically when a stream struggles</span><input type="checkbox" class="switch" id="sAdaptive"></label>
+          <div class="row"><span class="row-label">This computer</span><span class="row-value specs" id="sSpecs" translate="no"></span></div>
+        </div>
+        <p class="group-note" id="sSpecsNote">Miserecord looks at your graphics card, processor and memory on this computer only, to choose where a screen share starts. While you share, it lowers the size or frame rate when the stream can't keep up, and raises it again when it can. Right-click a stream to see why it stutters.</p>
         <p class="group-note">These are upper limits: on a slower connection the quality drops on its own instead of breaking. 4K at 60 fps looks best at 25 to 50 Mbps of upload. "Decide for me" balances screen shares and keeps videos smooth. Changing the codec also changes it for your friend.</p>
 
         <h3 class="group-title">Right now</h3>
@@ -651,6 +658,7 @@
 <script src="denoise.js"></script>
 <script src="settings.js"></script>
 <script src="extras.js"></script>
+<script src="adapt.js"></script>
 <script src="sounds.js"></script>
 <script src="app.js"></script>
 <script src="desktop.js"></script>

@@ -869,6 +869,8 @@ function onConnectionState(peer) {
         updateRoute();
         if (++state.statsTicks % 5 === 0) logVideoQuality().catch(() => {});
         checkCodecLoad().catch(() => {});
+        Adapt.tick().catch((err) => Log.warn('media', 'smart streaming check failed', err));
+        if (document.querySelector('.stream-info')) refreshStreamInfo().catch(() => {});
       }, 2000);
       break;
     case 'disconnected':
@@ -1262,6 +1264,9 @@ function onDataMessage(peer, msg) {
     case 'codec-fallback':
       onPeerCodecFallback(String(msg.codec));
       break;
+    case 'stream-stats':
+      onStreamStats(peer, msg);
+      break;
     case 'name':
       setPeerName(peer, msg.name);
       break;
@@ -1591,6 +1596,13 @@ async function toggleScreen() {
   state.screen.tile = tile.el;
   addQualityPicker(tile.el);
   publish('screen');
+  if (video) Adapt.start(video);
+  streaming();
+  // Right-click your own share for its numbers.
+  tile.el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showVolumeMenu(e, { title: I18n.t('Your screen'), value: null, actions: [{ label: tile.el.querySelector('.stream-info') ? 'Hide stream info' : 'Stream info', run: () => toggleStreamInfo(tile.el) }] });
+  });
   Sfx.play('streamStart');
   $('#screenBtn').classList.add('active');
   label($('#screenBtn'), 'Stop sharing');
@@ -1646,10 +1658,17 @@ async function streamFile(file) {
   };
   publish('media');
   Sfx.play('streamStart');
+  streaming();
   recapture();
   el.addEventListener('playing', recapture);
   $('#mediaBtn').classList.add('active');
   label($('#mediaBtn'), 'Stop streaming');
+}
+
+// The desktop app gives the capture and encoder above-normal priority while you
+// share a screen or stream a file.
+function streaming() {
+  if (window.miserecordDesktop && window.miserecordDesktop.setStreaming) window.miserecordDesktop.setStreaming(!!(state.screen || state.media));
 }
 
 // The desktop app hides itself from screen captures while you share a monitor;
@@ -1686,6 +1705,8 @@ function stopLocal(kind, quiet = false) {
     removeTile(s.tile);
   }
   updateStageLayout();
+  if (kind === 'screen') Adapt.stop();
+  streaming();
   if (kind === 'screen') {
     shareEnded();
     $('#screenBtn').classList.remove('active');

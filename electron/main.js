@@ -16,6 +16,7 @@ const {
   app, BrowserWindow, Menu, Notification, Tray, desktopCapturer, ipcMain, nativeImage, nativeTheme, net, protocol, session, shell,
 } = require('electron');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
 
@@ -44,6 +45,11 @@ const CSP = [
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
+
+// Calls and streams keep full speed while the window is hidden or covered by a
+// fullscreen game: Chromium would otherwise lower the page's priority.
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 protocol.registerSchemesAsPrivileged([
   { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
@@ -166,6 +172,8 @@ function start() {
   });
   // The page tells us its light or dark theme so the window buttons match.
   ipcMain.on('share-ended', endScreenShare);
+  ipcMain.on('streaming', (_e, on) => setStreamingPriority(!!on));
+  ipcMain.handle('system-info', systemInfo);
   ipcMain.on('set-language', (_e, lang) => {
     language = lang === 'fr' ? 'fr' : 'en';
     refreshTray();
@@ -378,6 +386,39 @@ function startScreenShare() {
 
 function endScreenShare() {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setContentProtection(false);
+}
+
+// While you stream, the processes that capture, encode and send it run at
+// above-normal CPU priority, so a game using the whole processor can't starve
+// the stream down to a few frames per second. Back to normal when you stop.
+function setStreamingPriority(on) {
+  const level = on ? os.constants.priority.PRIORITY_ABOVE_NORMAL : os.constants.priority.PRIORITY_NORMAL;
+  const wanted = (m) => m.type === 'GPU' || m.type === 'Tab' || (m.type === 'Utility' && /video_capture|audio/i.test(m.serviceName || m.name || ''));
+  for (const m of app.getAppMetrics()) {
+    if (!wanted(m)) continue;
+    try { os.setPriority(m.pid, level); } catch { /* not allowed or gone */ }
+  }
+}
+
+// A quick, local look at this computer, used to pick where a stream starts.
+// Nothing here leaves the computer.
+async function systemInfo() {
+  const cpus = os.cpus();
+  let gpus = [];
+  try {
+    const info = await app.getGPUInfo('complete');
+    gpus = (info.gpuDevice || []).map((g) => ({
+      vendor: { 0x10de: 'NVIDIA', 0x1002: 'AMD', 0x8086: 'Intel' }[g.vendorId] || 'other',
+      name: String(g.deviceString || '').trim(),
+      active: !!g.active,
+    }));
+  } catch { /* GPU info unavailable */ }
+  return {
+    cpu: cpus[0] ? cpus[0].model.trim() : '',
+    threads: cpus.length,
+    ramGB: Math.round(os.totalmem() / 2 ** 30),
+    gpus,
+  };
 }
 
 // ---------------------------------------------------------------- incoming calls

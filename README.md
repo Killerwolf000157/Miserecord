@@ -17,6 +17,7 @@ Private calls with your friends, 1:1 or in groups of up to 8, with no server to 
 - **AI noise suppression** (DeepFilterNet3, on by default) that runs on your computer, removes keyboards, fans and hiss and keeps your whole voice
 - **H.264 on the graphics card** by default for smooth game streams (AV1 is there too, and drops to H.264 by itself if the computer can't keep up)
 - **Sound panel** (speaker button in the call): your microphone volume, each person's voice and the streams, up to 200%
+- **Smart streaming**: a local look at your graphics card, processor and memory picks where a screen share starts; while you share it steps down (and back up) when frames drop or your upload can't keep up. Right-click a stream > **Stream info** shows what the sender sees and why it stutters
 - **Zoom into streams**: the magnifier button, or scroll in full screen (Ctrl+scroll on the stage); drag to move, double-click to reset
 - **Mute everyone else** next to Mute: silences every voice and stream you receive
 - **Quick quality switch** (Low / Medium / High) on your own screen share or stream
@@ -161,6 +162,7 @@ public/extras.js      volume, ringtone, push to talk and shortcuts
 public/desktop.js     desktop extras: screen picker, update banner, window buttons
 public/denoise.js     the microphone path: AI noise suppression (DeepFilterNet3, in public/vendor/dfn) and volume
 public/i18n.js        English and French
+public/adapt.js       smart streaming: specs scan, automatic quality, stream info
 electron/main.js      desktop app: window, tray, permissions, screen capture, global hotkeys, auto-update
 electron/preload.js   the small bridge between the page and the desktop app
 build/make-icon.js    draws the app icon
