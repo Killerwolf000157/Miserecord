@@ -1555,7 +1555,7 @@ function stopLocal(kind, quiet = false) {
   if (s.url) URL.revokeObjectURL(s.url);
   if (s.tile) {
     if (state.focusTile === s.tile) exitFocus();
-    s.tile.remove();
+    removeTile(s.tile);
   }
   updateStageLayout();
   if (kind === 'screen') {
@@ -1635,7 +1635,7 @@ function removeRemoteStream(peer, id) {
   }
   if (entry.tile) {
     if (state.focusTile === entry.tile.el) exitFocus();
-    entry.tile.el.remove();
+    removeTile(entry.tile.el);
   }
   updateStageLayout();
 }
@@ -1746,8 +1746,41 @@ function refreshPeerMeter(peer) {
   }
 }
 
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// Streams slide out instead of vanishing; the layout changes once they're gone.
+function removeTile(el) {
+  if (!el || el.classList.contains('leaving')) return;
+  el.classList.add('leaving');
+  let finished = false;
+  const done = () => {
+    if (finished) return;
+    finished = true;
+    el.remove();
+    updateStageLayout();
+  };
+  if (reducedMotion()) return done();
+  el.addEventListener('animationend', done, { once: true });
+  setTimeout(done, 450); // in case the animation doesn't run
+}
+
+// When the first stream appears (or the last one goes), the people glide
+// between the middle of the screen and the top row instead of jumping.
 function updateStageLayout() {
-  $('.stage').classList.toggle('has-tiles', $('#tiles').children.length > 0);
+  const stage = $('.stage');
+  const want = $('#tiles').children.length > 0;
+  if (stage.classList.contains('has-tiles') === want) return;
+  const people = $('.people');
+  const before = people.getBoundingClientRect();
+  stage.classList.toggle('has-tiles', want);
+  if (reducedMotion()) return;
+  const after = people.getBoundingClientRect();
+  const dy = (before.top + before.height / 2) - (after.top + after.height / 2);
+  if (Math.abs(dy) < 1) return;
+  people.animate(
+    [{ transform: `translateY(${dy}px)` }, { transform: 'none' }],
+    { duration: 460, easing: 'cubic-bezier(.2, .8, .2, 1)' },
+  );
 }
 
 // ===================================================================
