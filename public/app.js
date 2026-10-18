@@ -45,6 +45,17 @@ function initJoin() {
   $('#stun').value = load('stun') ?? DEFAULT_STUN;
   $('#relays').value = load('relays') ?? Rendezvous.DEFAULT_RELAYS.join('\n');
   $('#relays').onchange = () => { save('relays', $('#relays').value); startListening(); };
+  $('#stun').onchange = () => save('stun', $('#stun').value);
+  // In case the network settings got edited into something that doesn't work.
+  $('#sNetReset').onclick = () => {
+    $('#stun').value = DEFAULT_STUN;
+    $('#relays').value = Rendezvous.DEFAULT_RELAYS.join('\n');
+    save('stun', DEFAULT_STUN);
+    save('relays', $('#relays').value);
+    Log.info('app', 'network settings reset to defaults');
+    startListening();
+    toast(inCall() ? 'Network settings reset. They apply from your next call.' : 'Network settings reset');
+  };
   $('#joinForm').onsubmit = (e) => e.preventDefault();
   $('#startBtn').onclick = () => joinWithCodes('host');
   $('#answerBtn').onclick = () => joinWithCodes('guest');
