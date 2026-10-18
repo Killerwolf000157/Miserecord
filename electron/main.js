@@ -24,7 +24,8 @@ const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const ICON = path.join(__dirname, '..', 'build', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 const APP_ORIGIN = 'app://miserecord';
 const UPDATE_CHECK_MS = 4 * 60 * 60 * 1000;
-const START_HIDDEN = process.argv.includes('--hidden');
+// Started with Windows, or restarted after an update installed while hidden in the tray.
+let START_HIDDEN = process.argv.includes('--hidden');
 // On Windows the app draws its own top bar; the minimize, maximize and close
 // buttons stay the real system ones (with snap layouts), drawn over it.
 const OWN_TITLE_BAR = process.platform === 'win32';
@@ -92,7 +93,7 @@ app.on('window-all-closed', () => app.quit());
 // ---------------------------------------------------------------- desktop preferences
 // Kept in a file because the main process needs them before the page loads.
 const PREFS_FILE = () => path.join(app.getPath('userData'), 'desktop-prefs.json');
-const prefs = { background: true, autostart: false, askedAutostart: false, setupDone: false, toldAboutTray: false };
+const prefs = { background: true, autostart: false, askedAutostart: false, setupDone: false, toldAboutTray: false, hiddenAfterUpdate: false };
 
 function loadPrefs() {
   try { Object.assign(prefs, JSON.parse(fs.readFileSync(PREFS_FILE(), 'utf8'))); } catch { /* first run */ }
@@ -122,6 +123,11 @@ function start() {
   // installed app's cached icon.
   app.setAppUserModelId(app.isPackaged ? 'com.killerwolf000157.miserecord' : 'com.killerwolf000157.miserecord.dev');
   loadPrefs();
+  if (prefs.hiddenAfterUpdate) {
+    START_HIDDEN = true;
+    prefs.hiddenAfterUpdate = false;
+    savePrefs();
+  }
 
   protocol.handle('app', async (request) => {
     const url = new URL(request.url);
@@ -231,6 +237,8 @@ function createWindow() {
     }
   });
   mainWindow.on('closed', () => { mainWindow = null; endScreenShare(); });
+  // Closed to the tray with an update waiting: install it now, quietly.
+  mainWindow.on('hide', () => setTimeout(() => installWhenIdle(), 1000));
   // A reload drops any share, so the frame and capture hiding go with it.
   mainWindow.webContents.on('did-start-loading', endScreenShare);
 
@@ -502,21 +510,45 @@ function send(channel, payload) {
 }
 
 // ---------------------------------------------------------------- updates
+// Updates download in the background (only the changed parts) and install
+// silently: no setup wizard. A ready update installs on its own as soon as
+// you're not in a call and the window is closed to the tray; otherwise one click
+// on "Restart to update" does it in a few seconds, or it happens when you quit.
+let busy = false;
+let updateReady = false;
+let installWhenIdle = () => {}; // set once the updater is running
+
 function setupUpdates() {
+  ipcMain.on('busy', (_e, b) => {
+    busy = !!b;
+    installWhenIdle();
+  });
   if (!app.isPackaged) return; // updates only make sense for the installed app
   const { autoUpdater } = require('electron-updater');
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  const installNow = (hidden) => {
+    if (hidden) { prefs.hiddenAfterUpdate = true; savePrefs(); }
+    quitting = true;
+    autoUpdater.quitAndInstall(true, true); // silent, then start again
+  };
+  installWhenIdle = () => {
+    if (updateReady && !busy && mainWindow && !mainWindow.isVisible()) installNow(true);
+  };
   const status = (s, extra = {}) => send('update-status', { status: s, ...extra });
   autoUpdater.on('checking-for-update', () => status('checking'));
   autoUpdater.on('update-available', (info) => status('downloading', { version: info.version }));
   autoUpdater.on('update-not-available', () => status('current'));
   autoUpdater.on('download-progress', (p) => status('downloading', { percent: Math.round(p.percent) }));
-  autoUpdater.on('update-downloaded', (info) => status('ready', { version: info.version }));
+  autoUpdater.on('update-downloaded', (info) => {
+    updateReady = true;
+    status('ready', { version: info.version });
+    installWhenIdle();
+  });
   autoUpdater.on('error', (err) => status('error', { message: err ? String(err.message).split('\n')[0].slice(0, 200) : 'unknown error' }));
 
   ipcMain.on('check-for-updates', () => autoUpdater.checkForUpdates().catch(() => {}));
-  ipcMain.on('install-update', () => { quitting = true; autoUpdater.quitAndInstall(false, true); });
+  ipcMain.on('install-update', () => installNow(false));
 
   const check = () => autoUpdater.checkForUpdates().catch(() => {});
   setTimeout(check, 5000);

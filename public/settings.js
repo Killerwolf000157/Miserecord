@@ -8,9 +8,9 @@ const SETTINGS_DEFAULTS = {
   micId: '',
   speakerId: '',
   echo: true,
-  // off | standard (built-in) | strong (RNNoise) | strongest (GTCRN). GTCRN removes
-  // hiss and key clicks by 40-50 dB in tests, RNNoise only a few dB.
-  noise: 'strongest',
+  // off | standard (the browser's) | ai (DeepFilterNet3: removes keyboards and noise,
+  // keeps the whole voice)
+  noise: 'ai',
   agc: true,
   // High by default. These are ceilings: WebRTC lowers the rate on its own when
   // a connection can't keep up, so a slow line still works.
@@ -19,8 +19,10 @@ const SETTINGS_DEFAULTS = {
   shareRes: '1440',     // sharp text without 4K's upload cost
   shareFps: '60',
   videoQuality: 'veryhigh', // up to 20 Mbps, enough for crisp 1440p60
-  motion: 'auto',
-  codec: 'auto',
+  motion: 'auto',       // screen shares balanced, videos smooth
+  // AV1 looks best for the bitrate. If it's too heavy for the sender's computer,
+  // the call drops to H.264 by itself (see checkCodecLoad).
+  codec: 'video/AV1',
   language: 'auto',     // auto follows Windows; en | fr
   micGain: 100,         // your microphone volume for everyone, 0-200%
 };
@@ -28,7 +30,11 @@ const SETTINGS_DEFAULTS = {
 // Earlier versions saved their (lower) defaults with every settings change.
 // Values still equal to those old defaults were never picked by hand, so they
 // move up to the new ones. Anything you chose yourself stays.
-const SETTINGS_VERSION = 3;
+const SETTINGS_VERSION = 4;
+// Version 4 moved everyone's call quality to the best settings once: AI noise
+// suppression, AV1, balanced streaming, 1440p60. Devices, volumes, keys, theme
+// and language are kept.
+const BEST_QUALITY_KEYS = ['noise', 'echo', 'agc', 'voice', 'streamAudio', 'shareRes', 'shareFps', 'videoQuality', 'motion', 'codec'];
 const OLD_DEFAULTS = { voice: 'high', shareRes: 'native', shareFps: '30', videoQuality: 'high' };
 
 const VOICE_BITRATE = { standard: 32000, high: 64000, veryhigh: 128000, hifi: 256000 };
@@ -44,8 +50,9 @@ const settings = (() => {
       if (saved[key] === old) delete saved[key];
     }
   }
-  // Version 3 turned the noise switch into a choice. On becomes the new default.
-  if (saved.noise === true) delete saved.noise;
+  if ((saved.version || 1) < 4) for (const key of BEST_QUALITY_KEYS) delete saved[key];
+  // The noise switch became a choice; on, and the earlier AI models, become the new AI.
+  if (saved.noise === true || saved.noise === 'strong' || saved.noise === 'strongest') delete saved.noise;
   if (saved.noise === false) saved.noise = 'off';
   return { ...SETTINGS_DEFAULTS, ...saved, version: SETTINGS_VERSION };
 })();
@@ -66,9 +73,11 @@ function micConstraints(withDevice = true) {
   const hifi = isHifi();
   const audio = {
     echoCancellation: hifi ? false : settings.echo,
-    // The stronger modes do their own noise removal; stacking both dulls the voice.
+    // AI mode does its own noise removal; stacking both dulls the voice.
     noiseSuppression: hifi ? false : settings.noise === 'standard',
-    autoGainControl: hifi ? false : settings.agc,
+    // With AI on, its own leveller sets the volume after the noise is gone; the
+    // browser's would turn the noise up first.
+    autoGainControl: hifi ? false : settings.agc && settings.noise !== 'ai',
     sampleRate: { ideal: 48000 },
   };
   if (hifi) audio.channelCount = { ideal: 2 };
@@ -94,7 +103,7 @@ async function getRawMic() {
 async function getMic() {
   const raw = await getRawMic();
   try {
-    return await Denoise.wrap(raw, { mode: isHifi() ? 'off' : settings.noise, gain: settings.micGain / 100 });
+    return await Denoise.wrap(raw, { ai: !isHifi() && settings.noise === 'ai', level: settings.agc, gain: settings.micGain / 100 });
   } catch (err) {
     Log.warn('media', 'microphone processing unavailable, using the plain microphone', err);
     return raw;
@@ -139,10 +148,15 @@ function senderKind(peerId, sender) {
   return 'mic';
 }
 
+// sharp keeps full resolution and drops frames when the line or computer can't
+// keep up (text stays readable, but a game can fall to a few fps); smooth keeps
+// the frame rate; balanced lowers both a little, which suits most screen shares.
 function motionFor(kind) {
   if (settings.motion !== 'auto') return settings.motion;
-  return kind === 'media' ? 'smooth' : 'sharp';
+  return kind === 'media' ? 'smooth' : 'balanced';
 }
+
+const DEGRADATION = { sharp: 'maintain-resolution', smooth: 'maintain-framerate', balanced: 'balanced' };
 
 // Bitrate caps and how video degrades are set per sender, live.
 async function applySendParams() {
@@ -168,8 +182,8 @@ async function applySendParamsTo(peer) {
       else delete enc0.maxBitrate;
       if (kind === 'screen') enc0.maxFramerate = Number(settings.shareFps);
       const motion = motionFor(kind);
-      if ('contentHint' in track) track.contentHint = motion === 'sharp' ? 'detail' : 'motion';
-      params.degradationPreference = motion === 'sharp' ? 'maintain-resolution' : 'maintain-framerate';
+      if ('contentHint' in track) track.contentHint = motion === 'smooth' ? 'motion' : 'detail';
+      params.degradationPreference = DEGRADATION[motion] || 'balanced';
     }
     try {
       await sender.setParameters(params);
@@ -242,7 +256,8 @@ function applyCodecPrefs(pc) {
   const caps = RTCRtpReceiver.getCapabilities && RTCRtpReceiver.getCapabilities('video');
   if (!caps) return;
   // Automatic puts a hardware-encoded codec first when there is one.
-  const want = settings.codec === 'auto' ? hardwareCodecs.filter((t) => supportedVideoCodecs().includes(t)) : [settings.codec];
+  const codec = state.codecOverride || settings.codec;
+  const want = codec === 'auto' ? hardwareCodecs.filter((t) => supportedVideoCodecs().includes(t)) : [codec];
   const rank = (c) => (want.includes(c.mimeType) ? want.indexOf(c.mimeType) : want.length);
   const ordered = want.length ? [...caps.codecs].sort((a, b) => rank(a) - rank(b)) : [];
   for (const t of pc.getTransceivers()) {
@@ -564,7 +579,7 @@ function syncProcessingSwitches() {
   $('#sNoise').value = hifi ? 'off' : settings.noise;
   $('#sMicNote').textContent = hifi
     ? 'Hi-Fi voice is on, so these are off. Use headphones so your friend doesn\'t hear themselves.'
-    : 'Echo cancellation stops your friend hearing themselves through your speakers. Turn it off only with headphones. Strong noise suppression uses a small AI model on your computer to remove keyboards, fans and background noise.';
+    : 'Echo cancellation stops your friend hearing themselves through your speakers. Turn it off only with headphones. AI noise suppression runs a small model on your computer that removes keyboards, fans and background noise and keeps your whole voice.';
 }
 
 async function refreshDevices() {
@@ -627,6 +642,43 @@ function stopMicTest(keepButton = false) {
   if (t.own) t.stream.getTracks().forEach((x) => x.stop());
   $('#sMicLevel').style.width = '0';
   if (!keepButton) $('#sMicTest').textContent = 'Test';
+}
+
+// ---------- AV1 too heavy: fall back to H.264 for this call ----------
+// Every 2 s while you send video: if the encoder is AV1, limited by the CPU and
+// at under half the frame rate for 6 s in a row, everyone in the call switches to
+// H.264 (usually encoded by the graphics card) until the call ends.
+let codecStrain = 0;
+async function checkCodecLoad() {
+  if ((!state.screen && !state.media) || state.codecOverride) { codecStrain = 0; return; }
+  let strained = false;
+  for (const peer of state.peers.values()) {
+    if (peer.pc.connectionState !== 'connected') continue;
+    const stats = await peer.pc.getStats();
+    stats.forEach((r) => {
+      if (r.type !== 'outbound-rtp' || r.kind !== 'video' || !r.frameWidth) return;
+      const codec = r.codecId && stats.get(r.codecId);
+      const want = state.screen ? Number(settings.shareFps) : 30;
+      if (codec && codec.mimeType === 'video/AV1' && r.qualityLimitationReason === 'cpu' && (r.framesPerSecond || 0) < want / 2) strained = true;
+    });
+  }
+  codecStrain = strained ? codecStrain + 1 : 0;
+  if (codecStrain < 3) return;
+  codecStrain = 0;
+  const fallback = ['video/H264', 'video/VP8'].find((c) => supportedVideoCodecs().includes(c));
+  if (!fallback) return;
+  Log.warn('media', 'AV1 is too heavy for this computer, switching the call to ' + fallback);
+  state.codecOverride = fallback;
+  broadcast({ type: 'codec-fallback', codec: fallback });
+  renegotiate();
+  toast('Switched to H.264 for this call: AV1 was too heavy for this computer.');
+}
+
+// Someone's computer couldn't keep up with AV1: use their fallback for this call.
+function onPeerCodecFallback(codec) {
+  if (!supportedVideoCodecs().includes(codec)) return;
+  Log.info('media', 'a friend switched the call to ' + codec);
+  state.codecOverride = codec;
 }
 
 // ---------- live stats in the video tab ----------

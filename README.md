@@ -13,7 +13,8 @@ Private calls with your friends, 1:1 or in groups of up to 8, with no server to 
   up to 4K at 60 fps, video bitrate up to 50 Mbps, codec (AV1, VP9, H.264, VP8), and live
   stats of what's actually being sent and received
 - **Push to talk and shortcuts** (mute, leave), with side mouse buttons supported. In the desktop app they work even while a game is in front
-- **AI noise suppression** that runs on your computer and removes keyboards, fans and hiss (Settings > Audio)
+- **AI noise suppression** (DeepFilterNet3, on by default) that runs on your computer, removes keyboards, fans and hiss and keeps your whole voice
+- **AV1 video** by default, switching to H.264 by itself for the call if a computer can't keep up
 - **Sound panel** (speaker button in the call): your microphone volume, each person's voice and the streams, up to 200%
 - **Zoom into streams**: the magnifier button, or scroll in full screen (Ctrl+scroll on the stage); drag to move, double-click to reset
 - **Mute everyone else** next to Mute: silences every voice and stream you receive
@@ -29,8 +30,9 @@ encrypted end to end (DTLS-SRTP / DTLS). Nothing relays them.
 
 Download **Miserecord-Setup.exe** from the [latest release](https://github.com/Killerwolf000157/Miserecord/releases/latest)
 and run it. It adds Miserecord to the Start menu and desktop, keeps your name, settings and
-friends between launches, and updates itself: new versions download in the background and
-install when you click **Restart to update** (or the next time you quit).
+friends between launches, and updates itself: new versions download in the background (only the changed parts) and
+install silently, with no setup wizard: on their own when you're not in a call and the window is in the tray,
+or in a few seconds when you click **Restart to update** (or the next time you quit).
 
 The installer isn't code-signed yet, so Windows SmartScreen may say "Windows protected your PC".
 Click **More info → Run anyway**.
@@ -156,7 +158,7 @@ public/rendezvous.js  friends, encryption, Nostr relay client, BIP-340 signature
 public/log.js         connection log (Settings → General → Troubleshooting)
 public/extras.js      volume, ringtone, push to talk and shortcuts
 public/desktop.js     desktop extras: screen picker, update banner, window buttons
-public/denoise.js     AI noise suppression for the microphone (models in public/vendor/noise)
+public/denoise.js     the microphone path: AI noise suppression (DeepFilterNet3, in public/vendor/dfn) and volume
 public/i18n.js        English and French
 electron/main.js      desktop app: window, tray, permissions, screen capture, global hotkeys, auto-update
 electron/preload.js   the small bridge between the page and the desktop app

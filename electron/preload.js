@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('miserecordDesktop', {
   checkForUpdates: () => ipcRenderer.send('check-for-updates'),
   uninstall: (deleteData) => ipcRenderer.invoke('uninstall', { deleteData: !!deleteData }),
   installUpdate: () => ipcRenderer.send('install-update'),
+  setBusy: (busy) => ipcRenderer.send('busy', !!busy), // in a call or connecting
 
   // Calls
   incomingCall: (name) => ipcRenderer.send('incoming-call', String(name || '')),

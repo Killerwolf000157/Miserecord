@@ -112,6 +112,8 @@ async function prepare() {
 
 function showScreen(id) {
   for (const s of ['join', 'connect', 'ringing', 'call']) $(`#${s}`).hidden = s !== id;
+  // The desktop app only installs an update by itself when you're not in a call.
+  if (window.miserecordDesktop && window.miserecordDesktop.setBusy) window.miserecordDesktop.setBusy(id !== 'join');
 }
 
 function inCall() {
@@ -866,9 +868,11 @@ function onConnectionState(peer) {
       state.statsTimer = setInterval(() => {
         updateRoute();
         if (++state.statsTicks % 5 === 0) logVideoQuality().catch(() => {});
+        checkCodecLoad().catch(() => {});
       }, 2000);
       break;
     case 'disconnected':
+      peer.routeLogged = false; // log the route it recovers on
       setStatus(`Connection to ${peer.name} interrupted. Trying to recover…`, 'warn');
       break;
     case 'failed':
@@ -891,9 +895,21 @@ function pcSummary(pc) {
   return { signaling: pc.signalingState, ice: pc.iceConnectionState, gathering: pc.iceGatheringState, connection: pc.connectionState };
 }
 
+// A connection can come back (a VPN switched off, Wi-Fi back) with only the ICE
+// state saying so at first; either one counts.
+const isUp = (pc) => pc.connectionState === 'connected' || ['connected', 'completed'].includes(pc.iceConnectionState);
+
+// Runs every 2 s during a call: the status always reflects the connections as
+// they are now, so a recovered call never stays on "trying to recover".
 async function updateRoute() {
-  const connected = [...state.peers.values()].filter((p) => p.pc.connectionState === 'connected');
+  const peers = [...state.peers.values()].filter((p) => p.wasConnected);
+  const connected = peers.filter((p) => isUp(p.pc));
   if (!connected.length) return;
+  const down = peers.find((p) => !isUp(p.pc));
+  if (down) {
+    setStatus(`Connection to ${down.name} interrupted. Trying to recover…`, 'warn');
+    return;
+  }
   const details = [];
   for (const peer of connected) {
     const stats = await peer.pc.getStats();
@@ -918,9 +934,9 @@ async function updateRoute() {
     }
     details.push({ lan: local && local.candidateType === 'host', rtt: pair.currentRoundTripTime });
   }
-  if (!details.length) return;
   if (connected.length === 1) {
     const d = details[0];
+    if (!d) return setStatus('Connected directly', 'ok');
     const rtt = d.rtt != null ? `${Math.round(d.rtt * 1000)} ms ` : '';
     setStatus('Connected directly', 'ok', `${rtt}${d.lan ? 'on your network' : 'over the internet'}`);
   } else {
@@ -989,6 +1005,7 @@ function leave() {
   state.lobby = null;
   state.mode = null;
   state.codesRole = null;
+  state.codecOverride = null;
   renderLobby();
   stopLocal('screen', true);
   stopLocal('media', true);
@@ -1159,6 +1176,9 @@ function onDataMessage(peer, msg) {
       break;
     case 'codec':
       onPeerCodec(String(msg.codec));
+      break;
+    case 'codec-fallback':
+      onPeerCodecFallback(String(msg.codec));
       break;
     case 'name':
       setPeerName(peer, msg.name);

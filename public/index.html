@@ -400,8 +400,7 @@
             <select id="sNoise">
               <option value="off">Off</option>
               <option value="standard">Standard</option>
-              <option value="strong">AI, light</option>
-              <option value="strongest">AI, strong</option>
+              <option value="ai">AI</option>
             </select></label>
           <label class="row"><span class="row-label">Automatic volume</span><input type="checkbox" class="switch" id="sAgc"></label>
         </div>
@@ -489,12 +488,13 @@
           <label class="row"><span class="row-label">When the connection is busy</span>
             <select id="sMotion">
               <option value="auto">Decide for me</option>
+              <option value="balanced">Balance both</option>
               <option value="sharp">Keep it sharp</option>
               <option value="smooth">Keep it smooth</option>
             </select></label>
           <label class="row"><span class="row-label">Codec</span><select id="sCodec"></select></label>
         </div>
-        <p class="group-note">These are upper limits: on a slower connection the quality drops on its own instead of breaking. 4K at 60 fps looks best at 25 to 50 Mbps of upload. "Decide for me" keeps screen shares sharp and videos smooth. Changing the codec also changes it for your friend.</p>
+        <p class="group-note">These are upper limits: on a slower connection the quality drops on its own instead of breaking. 4K at 60 fps looks best at 25 to 50 Mbps of upload. "Decide for me" balances screen shares and keeps videos smooth. Changing the codec also changes it for your friend.</p>
 
         <h3 class="group-title">Right now</h3>
         <div class="group" id="sStats">
