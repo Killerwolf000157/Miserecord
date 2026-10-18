@@ -17,11 +17,12 @@ for (const [k, v] of Object.entries(SETTINGS_DEFAULTS)) if (!(k in settings)) se
 // ------------------------------------------------------------------ volume
 
 function applyVolumes() {
-  for (const entry of state.remote.values()) {
-    if (entry.audio) entry.audio.volume = settings.voiceVolume / 100;
-    if (entry.tile) entry.tile.video.volume = settings.streamVolume / 100;
+  for (const peer of state.peers.values()) {
+    for (const entry of peer.remote.values()) {
+      if (entry.audio) entry.audio.volume = voiceVolumeFor(peer);
+      if (entry.tile) entry.tile.video.volume = settings.streamVolume / 100;
+    }
   }
-  syncSlider($('#peerVol'), settings.voiceVolume);
   for (const s of document.querySelectorAll('.tile.remote .tile-vol .slider')) syncSlider(s, settings.streamVolume);
 }
 
@@ -131,7 +132,7 @@ function onHotkey({ name, down }) {
   if (name === 'ptt') return setPtt(down);
   if (!down) return;
   if (name === 'mute' && state.mic) toggleMute();
-  if (name === 'leave' && (state.pc || state.session)) leave();
+  if (name === 'leave' && state.mode) leave();
 }
 
 function keyLabel(b) {
@@ -202,7 +203,7 @@ function finishCapture(binding) {
 
 function initExtras() {
   // Volume
-  for (const [id, key] of [['#sVoiceVol', 'voiceVolume'], ['#sStreamVol', 'streamVolume'], ['#sRingVol', 'ringVolume'], ['#peerVol', 'voiceVolume']]) {
+  for (const [id, key] of [['#sVoiceVol', 'voiceVolume'], ['#sStreamVol', 'streamVolume'], ['#sRingVol', 'ringVolume']]) {
     const input = $(id);
     syncSlider(input, settings[key]);
     input.oninput = () => {

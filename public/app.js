@@ -1,46 +1,43 @@
 // Miserecord client.
-// Media and data travel over a direct WebRTC connection between the two
-// browsers. There is no server: the first connection info is swapped by hand
-// as two copy-paste codes, and once connected all further signaling
-// (e.g. starting a screen share) goes over the direct connection itself.
+// Every call is a set of direct WebRTC connections, one per other person (a mesh).
+// There is no server. The first connection info is exchanged one of three ways:
+//   - two copy-paste codes (a new friend, 1:1),
+//   - encrypted relay messages to a saved friend (1:1),
+//   - encrypted relay messages on a lobby's topic, derived from its code (groups).
+// Once a connection is up, all further signaling (e.g. starting a screen share)
+// goes over that connection itself.
 'use strict';
 
 const $ = (sel) => document.querySelector(sel);
 const DEFAULT_STUN = 'stun:stun.l.google.com:19302\nstun:stun1.l.google.com:19302';
 const FILE_BUFFER_HIGH = 4 * 1024 * 1024;
 const FILE_BUFFER_LOW = 1024 * 1024;
+const MAX_PEOPLE = 8;
 
 const state = {
   name: '',
-  // peer connection
-  pc: null,
-  dc: null,
-  polite: false,
-  makingOffer: false,
-  ignoreOffer: false,
-  settingAnswer: false,
-  restartedIce: false,
-  signalChain: Promise.resolve(),
-  statsTimer: null,
+  myId: randomId().slice(0, 16), // identifies this window inside a lobby
+  mode: null,           // 'codes' | 'friend' | 'lobby' while in a call
+  peers: new Map(),     // peer id -> Peer
+  // 1:1 with a saved friend
+  session: null,        // { friend, sid, role, ringTimer, timeout }
+  // group lobby
+  lobby: null,          // { code, channel, host, hostId, locked, joinedAt, blocked, announceTimer, timeout }
   // local media
-  mic: null,            // MediaStream
+  mic: null,
   muted: false,
-  screen: null,         // { stream, senders, label }
-  media: null,          // { stream, senders, label, el, url }
-  // remote
-  peerName: '',
-  remote: new Map(),    // streamId -> { stream, tile? , audio? }
-  remoteMeta: new Map(),// streamId -> { kind, label }
+  screen: null,         // { stream, senders: Map(peerId -> sender[]), label, tile }
+  media: null,          // { stream, senders: Map(peerId -> sender[]), label, el, url, tile }
   // files
   fileChain: Promise.resolve(),
-  incoming: null,
   // audio levels
   audioCtx: null,
-  meters: new Map(),    // element -> analyser
+  meters: new Map(),    // card element -> analyser
+  statsTimer: null,
 };
 
 // ===================================================================
-// Join screen
+// Home screen
 // ===================================================================
 function initJoin() {
   if (!window.isSecureContext) $('#insecure').hidden = false;
@@ -49,8 +46,11 @@ function initJoin() {
   $('#relays').value = load('relays') ?? Rendezvous.DEFAULT_RELAYS.join('\n');
   $('#relays').onchange = () => { save('relays', $('#relays').value); startListening(); };
   $('#joinForm').onsubmit = (e) => e.preventDefault();
-  $('#startBtn').onclick = () => join('host');
-  $('#answerBtn').onclick = () => join('guest');
+  $('#startBtn').onclick = () => joinWithCodes('host');
+  $('#answerBtn').onclick = () => joinWithCodes('guest');
+  $('#createLobbyBtn').onclick = createLobby;
+  $('#joinLobbyBtn').onclick = () => joinLobby($('#lobbyInput').value);
+  $('#lobbyInput').onkeydown = (e) => { if (e.key === 'Enter') joinLobby($('#lobbyInput').value); };
   $('#cancelRing').onclick = leave;
   $('#acceptBtn').onclick = () => state.ringIn && acceptCall(state.ringIn.friend, state.ringIn.sid);
   $('#declineBtn').onclick = declineCall;
@@ -99,37 +99,41 @@ async function prepare() {
   return true;
 }
 
-// role: 'host' starts a call with codes, 'guest' answers with a code.
-async function join(role) {
-  if (!(await prepare())) return;
-  // The code exchange comes first; the call screen opens once connected.
-  showScreen('connect');
-  startManual(role);
-}
-
 function showScreen(id) {
   for (const s of ['join', 'connect', 'ringing', 'call']) $(`#${s}`).hidden = s !== id;
 }
 
+function inCall() {
+  return !!state.mode;
+}
+
 // ===================================================================
-// Saved friends: call again without codes, via encrypted relay messages
+// Relay pool: saved friends and lobbies
 // ===================================================================
 function relayUrls() {
   return $('#relays').value.split(/\s+/).filter((u) => /^wss:\/\/\S+$/.test(u));
 }
 
+function ensurePool() {
+  if (state.pool) return state.pool;
+  state.pool = new Rendezvous.Pool(relayUrls(), onRelayMessage, onRelayStatus);
+  state.pool.start();
+  return state.pool;
+}
+
 function startListening() {
+  const lobbyChannel = state.lobby && state.lobby.channel;
   if (state.pool) state.pool.close();
   state.pool = null;
   renderFriends();
   const count = Rendezvous.friends().length;
-  if (!count) {
+  if (!count && !lobbyChannel) {
     Log.info('relay', 'no saved friends, not listening');
     return;
   }
-  Log.info('relay', 'listening for calls', { friends: count, relays: relayUrls().length });
-  state.pool = new Rendezvous.Pool(relayUrls(), onRelayMessage, onRelayStatus);
-  state.pool.start();
+  Log.info('relay', 'listening', { friends: count, lobby: !!lobbyChannel, relays: relayUrls().length });
+  ensurePool();
+  if (lobbyChannel) state.pool.addChannel(lobbyChannel);
 }
 
 function onRelayStatus(open) {
@@ -137,12 +141,33 @@ function onRelayStatus(open) {
   $('#relayText').textContent = open ? 'Ready for calls' : 'Connecting to relays';
 }
 
+function waitForRelay(timeoutMs = 8000) {
+  const pool = ensurePool();
+  if (pool.connected()) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (pool.connected() || Date.now() - started > timeoutMs) {
+        clearInterval(timer);
+        resolve(pool.connected() > 0);
+      }
+    }, 200);
+  });
+}
+
+function onRelayMessage(channel, msg) {
+  if (channel.lobby) return onLobbyMessage(channel, msg);
+  onFriendMessage(channel, msg);
+}
+
+// ===================================================================
+// Saved friends: call again without codes (1:1)
+// ===================================================================
 function renderFriends() {
   const list = Rendezvous.friends();
   const any = list.length > 0;
   $('#friendsSection').hidden = !any;
   $('#addTitle').hidden = !any;
-  $('#startBtn').classList.toggle('primary', !any);
   $('#codesHint').textContent = any
     ? 'Swap two codes once with someone new. After that, they show up above.'
     : "You'll swap two codes with your friend over any chat app. After that first call they're saved here, so next time you just press Call.";
@@ -189,8 +214,8 @@ function startOfDay(t) {
 }
 
 async function callFriend(friend) {
-  if (state.session || state.pc) {
-    Log.warn('call', 'call pressed while already busy', { session: !!state.session, pc: !!state.pc });
+  if (inCall()) {
+    Log.warn('call', 'call pressed while already in a call', { mode: state.mode });
     return;
   }
   if (!state.pool || !state.pool.connected()) {
@@ -200,6 +225,7 @@ async function callFriend(friend) {
   if (!(await prepare())) return;
   const sid = randomId();
   Log.info('call', 'calling friend', { friend: friend.id.slice(0, 6), sid: sid.slice(0, 6), relays: state.pool.connected() });
+  state.mode = 'friend';
   state.session = { friend, sid, role: 'caller' };
   showRinging(`Calling ${friend.name}`, `${friend.name} needs Miserecord open to pick up.`);
   setStatus('Ringing', 'wait');
@@ -220,7 +246,12 @@ function showRinging(title, sub) {
   showScreen('ringing');
 }
 
-function onRelayMessage(friend, msg) {
+// Signals for a 1:1 call with a saved friend go through the relays until connected.
+function friendSender(friend, sid) {
+  return (desc) => state.pool && state.pool.send(friend, { type: 'signal', sid, data: { description: desc } });
+}
+
+function onFriendMessage(friend, msg) {
   const s = state.session;
   const mine = s && s.friend.id === friend.id;
   if (msg.type !== 'ring' || !state.ringIn || state.ringIn.sid !== msg.sid) {
@@ -230,10 +261,10 @@ function onRelayMessage(friend, msg) {
     case 'ring':
       if (mine) {
         // Both of you pressed Call at the same moment: one side answers the other.
-        if (s.role === 'caller' && !state.pc && s.sid > msg.sid) acceptCall(friend, msg.sid, true);
+        if (s.role === 'caller' && !state.peers.size && s.sid > msg.sid) acceptCall(friend, msg.sid, true);
         return;
       }
-      if (s || state.pc || $('#join').hidden) {
+      if (inCall() || $('#join').hidden) {
         state.pool.send(friend, { type: 'busy', sid: msg.sid });
         return;
       }
@@ -246,25 +277,27 @@ function onRelayMessage(friend, msg) {
       }
       break;
     case 'accept':
-      if (mine && s.role === 'caller' && s.sid === msg.sid && !state.pc) {
+      if (mine && s.role === 'caller' && s.sid === msg.sid && !state.peers.size) {
         stopRinging();
         setStatus(`Connecting to ${friend.name}`, 'wait');
         $('#ringTitle').textContent = `Connecting to ${friend.name}`;
         $('#ringSub').textContent = 'Setting up a direct connection.';
         armConnectTimeout();
-        startPeer(false);
+        createPeer(friend.id, { name: friend.name, polite: false, sendPre: friendSender(friend, s.sid) });
       }
       break;
     case 'decline':
     case 'busy':
-      if (mine && s.role === 'caller' && s.sid === msg.sid && !state.pc) {
+      if (mine && s.role === 'caller' && s.sid === msg.sid && !state.peers.size) {
         leave();
         toast(msg.type === 'busy' ? `${friend.name} is in another call` : `${friend.name} can't talk right now`);
       }
       break;
-    case 'signal':
-      if (mine && s.sid === msg.sid && msg.data) queueSignal(msg.data);
+    case 'signal': {
+      const peer = state.peers.get(friend.id);
+      if (mine && s.sid === msg.sid && msg.data && peer) queueSignal(peer, msg.data);
       break;
+    }
   }
 }
 
@@ -312,12 +345,13 @@ async function acceptCall(friend, sid, auto = false) {
   hideIncoming();
   if (!auto && !(await prepare())) return;
   stopRinging();
+  state.mode = 'friend';
   state.session = { friend, sid, role: 'callee' };
   showRinging(`Connecting to ${friend.name}`, 'Setting up a direct connection.');
   setStatus(`Connecting to ${friend.name}`, 'wait');
   armConnectTimeout();
   // The caller makes the offer; this side waits for it and answers.
-  startPeer(true);
+  createPeer(friend.id, { name: friend.name, polite: true, waitForOffer: true, sendPre: friendSender(friend, sid) });
   const sent = await state.pool.send(friend, { type: 'accept', sid });
   Log.info('call', 'sent accept', { relays: sent });
   if (!sent) Log.error('call', 'no relay was connected, the caller will not see the answer');
@@ -328,10 +362,9 @@ function armConnectTimeout() {
   clearTimeout(s.timeout);
   s.timeout = setTimeout(() => {
     if (state.session !== s || isConnected()) return;
-    Log.warn('call', 'not connected 30 s after answering, giving up', {
-      pc: state.pc ? { signaling: state.pc.signalingState, ice: state.pc.iceConnectionState, gathering: state.pc.iceGatheringState, connection: state.pc.connectionState } : 'none',
-    });
-    if (state.pc) logIceDiagnosis(state.pc);
+    const peer = state.peers.get(s.friend.id);
+    Log.warn('call', 'not connected after 30 s, giving up', peer ? pcSummary(peer.pc) : 'no connection');
+    if (peer) logIceDiagnosis(peer.pc);
     leave();
     toast(`Couldn't connect to ${s.friend.name}. A strict firewall may be blocking direct connections.`, 'err');
   }, 30000);
@@ -344,19 +377,208 @@ function stopRinging() {
   clearTimeout(s.timeout);
 }
 
-function endSession() {
-  stopRinging();
-  state.session = null;
+// ===================================================================
+// Group lobbies
+// ===================================================================
+async function createLobby() {
+  if (inCall()) return;
+  if (!(await prepare())) return;
+  const code = Rendezvous.newLobbyCode();
+  Log.info('lobby', 'creating lobby');
+  await enterLobby(code, true);
+  setStatus('Waiting for people to join', 'wait');
+}
+
+async function joinLobby(text) {
+  if (inCall()) return;
+  const code = Rendezvous.normalizeLobbyCode(text);
+  if (!code) {
+    Log.warn('lobby', 'invalid code entered', { length: String(text || '').length });
+    $('#lobbyInput').focus();
+    return toast('That code needs 16 letters and numbers, like 7KQ4-XM2P-9DTA-H3VW.', 'err');
+  }
+  if (!(await prepare())) return;
+  Log.info('lobby', 'joining lobby');
+  showRinging('Joining the lobby', 'Looking for the people in it.');
+  setStatus('Connecting to relays', 'wait');
+  await enterLobby(code, false);
+}
+
+async function enterLobby(code, host) {
+  state.mode = 'lobby';
+  const channel = await Rendezvous.lobbyChannel(code);
+  state.lobby = {
+    code, channel, host, hostId: host ? state.myId : null, locked: false,
+    joinedAt: Date.now(), blocked: new Set(),
+  };
+  ensurePool();
+  await state.pool.addChannel(channel);
+  const ok = await waitForRelay();
+  Log.info('lobby', 'relays', { connected: state.pool.connected() });
+  if (!ok) {
+    leave();
+    return toast("Can't reach the relays right now. Check your internet connection.", 'err');
+  }
+  renderLobby();
+  if (host) {
+    showScreen('call');
+    return;
+  }
+  // Announce yourself; everyone already in the lobby connects to you. Repeats
+  // back off (relays rate-limit chatty clients) and stop soon after connecting.
+  const lobby = state.lobby;
+  const schedule = [0, 2000, 5000, 10000, 18000, 30000];
+  let sinceConnected = 0;
+  const announce = (i) => {
+    if (state.lobby !== lobby || i >= schedule.length) return;
+    if (isConnected() && ++sinceConnected > 1) return; // one more after the first connection, for late listeners
+    lobbySend({ type: 'join', name: state.name, since: lobby.joinedAt });
+    lobby.announceTimer = setTimeout(() => announce(i + 1), schedule[i + 1] - schedule[i]);
+  };
+  announce(0);
+  setStatus('Waiting for an answer', 'wait');
+  lobby.timeout = setTimeout(() => {
+    if (state.lobby !== lobby || state.peers.size) return;
+    Log.warn('lobby', 'nobody answered in 30 s');
+    leave();
+    toast('Nobody answered. Check the code, and make sure someone in the lobby has Miserecord open.', 'err');
+  }, 30000);
+}
+
+function lobbySend(body) {
+  const lobby = state.lobby;
+  if (!lobby || !state.pool) return Promise.resolve(0);
+  return state.pool.send(lobby.channel, { ...body, from: state.myId });
+}
+
+function lobbySender(peerId) {
+  return (desc) => lobbySend({ type: 'signal', to: peerId, data: { description: desc } });
+}
+
+function onLobbyMessage(channel, msg) {
+  const lobby = state.lobby;
+  if (!lobby || channel.id !== lobby.channel.id) return;
+  const from = String(msg.from || '');
+  if (!from || from === state.myId) return;
+  if (msg.to && msg.to !== state.myId) return; // addressed to someone else
+  Log.info('lobby', `received ${msg.type}`, { from: from.slice(0, 6) });
+  switch (msg.type) {
+    case 'join': {
+      if (lobby.blocked.has(from)) return;
+      const existing = state.peers.get(from);
+      if (existing && existing.pc.connectionState !== 'failed' && existing.pc.connectionState !== 'closed') return;
+      if (lobby.locked) {
+        if (lobby.host) lobbySend({ type: 'locked', to: from });
+        return;
+      }
+      if (state.peers.size >= MAX_PEOPLE - 1) {
+        lobbySend({ type: 'full', to: from });
+        return;
+      }
+      // Whoever joined earlier makes the offer, so two newcomers don't both wait.
+      const since = Number(msg.since) || Date.now();
+      const iOffer = lobby.joinedAt < since || (lobby.joinedAt === since && state.myId < from);
+      if (!iOffer) return;
+      if (existing) removePeer(existing, 'retry');
+      createPeer(from, { name: String(msg.name || 'Someone').slice(0, 32), polite: state.myId > from, sendPre: lobbySender(from) });
+      break;
+    }
+    case 'signal': {
+      if (lobby.blocked.has(from) || !msg.data) return;
+      let peer = state.peers.get(from);
+      if (!peer) {
+        if (!msg.data.description || msg.data.description.type !== 'offer') return;
+        if (state.peers.size >= MAX_PEOPLE - 1) return;
+        peer = createPeer(from, { name: 'Someone', polite: state.myId > from, waitForOffer: true, sendPre: lobbySender(from) });
+      }
+      queueSignal(peer, msg.data);
+      break;
+    }
+    case 'locked':
+    case 'full':
+      if (!state.peers.size) {
+        leave();
+        toast(msg.type === 'locked' ? 'This lobby is locked. Ask the host to unlock it.' : `This lobby is full. Up to ${MAX_PEOPLE} people can be in one.`, 'err');
+      }
+      break;
+  }
+}
+
+function renderLobby() {
+  const lobby = state.lobby;
+  const show = !!lobby;
+  $('#lobbyChip').hidden = !show;
+  if (!show) {
+    $('#lobbyInvite').hidden = true;
+    return;
+  }
+  $('#lobbyCodeChip').textContent = lobby.code;
+  $('#lobbyCodeBig').textContent = lobby.code;
+  const isHost = lobby.hostId === state.myId;
+  $('#lobbyLock').hidden = !isHost;
+  $('#lobbyLock').classList.toggle('on', lobby.locked);
+  $('#lobbyLock').title = lobby.locked ? 'Unlock the lobby' : 'Lock the lobby';
+  $('#lobbyInvite').hidden = state.peers.size > 0;
+  $('#lobbyChip').classList.toggle('locked', lobby.locked);
+  for (const peer of state.peers.values()) peer.card.querySelector('.kick').hidden = !isHost;
+  updatePeopleLayout();
+}
+
+function setLobbyLocked(locked) {
+  const lobby = state.lobby;
+  if (!lobby || lobby.hostId !== state.myId) return;
+  lobby.locked = locked;
+  Log.info('lobby', locked ? 'locked' : 'unlocked');
+  broadcast({ type: 'lobby', hostId: lobby.hostId, locked });
+  toast(locked ? 'Lobby locked. Nobody new can join.' : 'Lobby unlocked');
+  renderLobby();
+}
+
+function kickPeer(peer) {
+  const lobby = state.lobby;
+  if (!lobby || lobby.hostId !== state.myId) return;
+  if (!confirm(`Remove ${peer.name} from the lobby?`)) return;
+  Log.info('lobby', 'removing someone', { id: peer.id.slice(0, 6) });
+  lobby.blocked.add(peer.id);
+  broadcast({ type: 'kick', id: peer.id });
+  removePeer(peer, 'removed');
+}
+
+async function copyLobbyCode() {
+  if (!state.lobby) return;
+  try {
+    await navigator.clipboard.writeText(state.lobby.code);
+    toast('Lobby code copied');
+  } catch {
+    toast(state.lobby.code);
+  }
+}
+
+function initLobby() {
+  $('#lobbyCopyChip').onclick = copyLobbyCode;
+  $('#lobbyCopyBig').onclick = copyLobbyCode;
+  $('#lobbyLock').onclick = () => setLobbyLocked(!state.lobby.locked);
 }
 
 // ===================================================================
-// First call with a new friend: swap two codes by hand
+// First call with a new friend: swap two codes by hand (1:1)
 // ===================================================================
 const CODE_PREFIX = 'MSR1.';
+const CODES_PEER = 'codes';
+
+async function joinWithCodes(role) {
+  if (inCall()) return;
+  if (!(await prepare())) return;
+  // The code exchange comes first; the call screen opens once connected.
+  state.mode = 'codes';
+  showScreen('connect');
+  startManual(role);
+}
 
 function startManual(role) {
   Log.info('codes', role === 'host' ? 'starting a call with codes' : 'joining with a code');
   const host = role === 'host';
+  state.codesRole = role;
   $('#connectTitle').textContent = host ? 'Start a call' : 'Join a call';
   $('#myCode').value = '';
   $('#theirCode').value = '';
@@ -368,8 +590,8 @@ function startManual(role) {
   $('#mMine').style.order = host ? 0 : 1;
   $('#mMine').hidden = !host;
   if (host) {
-    // The host's offer is created by onnegotiationneeded and lands in showMyCode().
-    startPeer(false);
+    // The offer is created by onnegotiationneeded and lands in showMyCode().
+    createPeer(CODES_PEER, { name: 'Your friend', polite: false, sendPre: showMyCode });
     setStatus('Preparing your code…', 'wait');
   } else {
     setStatus("Waiting for your friend's code", 'wait');
@@ -378,7 +600,7 @@ function startManual(role) {
 }
 
 async function useTheirCode() {
-  const host = !!state.pc && !state.polite;
+  const host = state.codesRole === 'host';
   let description;
   try {
     description = await decodeCode($('#theirCode').value);
@@ -394,45 +616,24 @@ async function useTheirCode() {
       : "That's a reply code. Paste the code from the friend who started the call.", 'err');
   }
   $('#useCode').disabled = true;
+  let peer = state.peers.get(CODES_PEER);
   if (!host) {
-    startPeer(true);
+    peer = createPeer(CODES_PEER, { name: 'Your friend', polite: true, waitForOffer: true, sendPre: showMyCode });
     $('#mMine').hidden = false;
     setStatus('Preparing your reply code…', 'wait');
   } else {
     setStatus('Connecting directly to your friend…', 'wait');
   }
-  queueSignal({ description });
+  queueSignal(peer, { description });
 }
 
 // Called instead of sending our description to a server.
-async function showMyCode() {
-  const pc = state.pc;
-  const started = Date.now();
-  await waitForIceGathering(pc);
-  if (pc !== state.pc) return;
-  $('#myCode').value = await encodeCode(pc.localDescription);
-  Log.info('codes', `${pc.localDescription.type} code ready`, { chars: $('#myCode').value.length, gatherMs: Date.now() - started, sdp: Log.sdp(pc.localDescription) });
+async function showMyCode(desc) {
+  $('#myCode').value = await encodeCode(desc);
+  Log.info('codes', `${desc.type} code ready`, { chars: $('#myCode').value.length, sdp: Log.sdp(desc) });
   $('#copyCode').disabled = false;
-  setStatus(state.polite ? 'Send the reply code back. Connecting once they paste it…'
+  setStatus(state.codesRole === 'guest' ? 'Send the reply code back. Connecting once they paste it…'
     : "Send the code, then paste your friend's reply", 'wait');
-}
-
-// No trickle ICE in this mode: the code carries every candidate found.
-function waitForIceGathering(pc) {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise((resolve) => {
-    const done = () => {
-      if (pc.iceGatheringState !== 'complete') return;
-      pc.removeEventListener('icegatheringstatechange', done);
-      resolve();
-    };
-    pc.addEventListener('icegatheringstatechange', done);
-    // Use whatever was found if a STUN server is slow.
-    setTimeout(() => {
-      if (pc.iceGatheringState !== 'complete') Log.warn('ice', 'gathering still running after 5 s, sending what was found so far');
-      resolve();
-    }, 5000);
-  });
 }
 
 async function encodeCode(desc) {
@@ -469,150 +670,168 @@ function initManual() {
 }
 
 // ===================================================================
-// Signaling
+// Peers: one direct connection per other person, with "perfect negotiation"
+// (either side can add or remove tracks at any time)
 // ===================================================================
-function sendSignal(data) {
-  // Once connected, renegotiation (e.g. starting a screen share) goes over
-  // the direct connection itself, so no new codes are needed.
-  if (state.dc && state.dc.readyState === 'open') {
-    Log.info('signal', `sent ${data.description ? data.description.type : 'candidate'} over the direct connection`);
-    state.dc.send(JSON.stringify({ type: 'signal', data }));
-    return Promise.resolve();
-  }
-  // Candidates are bundled into the description once gathering finishes,
-  // so only descriptions are ever sent before connecting.
-  if (!data.description) return Promise.resolve();
-  // Calling a saved friend: send it as an encrypted relay message.
-  if (state.session && state.pool) {
-    const { friend, sid } = state.session;
-    const pc = state.pc;
-    const started = Date.now();
-    return waitForIceGathering(pc).then(async () => {
-      if (pc !== state.pc || !state.pool) {
-        Log.warn('signal', 'connection changed while gathering, not sending');
-        return;
-      }
-      const sent = await state.pool.send(friend, { type: 'signal', sid, data: { description: pc.localDescription } });
-      Log.info('signal', `sent ${pc.localDescription.type} via relays`, { relays: sent, gatherMs: Date.now() - started, sdp: Log.sdp(pc.localDescription) });
-      if (!sent) Log.error('signal', 'no relay was connected, nothing was sent');
-    });
-  }
-  // First call with someone new: it becomes the code to copy.
-  return showMyCode();
-}
 
-function queueSignal(data) {
-  state.signalChain = state.signalChain
-    .then(() => onSignal(data))
-    .catch((err) => console.error('signal error', err));
-}
-
-// ===================================================================
-// Peer connection with "perfect negotiation"
-// (lets either side add or remove tracks at any time)
-// ===================================================================
-function startPeer(polite) {
-  if (state.pc) {
-    if (isConnected()) return;
-    teardownPeer();
-  }
-  state.polite = polite;
-  state.restartedIce = false;
+// options: name, polite, waitForOffer (don't send the first offer), sendPre(desc)
+// for signaling before the direct channel is open.
+function createPeer(id, { name, polite, waitForOffer = false, sendPre }) {
+  const old = state.peers.get(id);
+  if (old) removePeer(old, 'replaced');
   const servers = iceServers();
   const pc = new RTCPeerConnection({ iceServers: servers });
-  state.pc = pc;
-  Log.info('pc', 'created', { polite, stunServers: servers.length ? servers[0].urls.length : 0, via: state.session ? 'relay' : 'codes' });
-
-  pc.onnegotiationneeded = async () => {
-    // The guest never starts the first offer; it answers the pasted one.
-    if (state.polite && !(state.dc && state.dc.readyState === 'open')) {
-      Log.info('pc', 'negotiation needed, waiting for the other side to offer');
-      return;
-    }
-    Log.info('pc', 'negotiation needed, making offer');
-    try {
-      state.makingOffer = true;
-      await setLocal(pc);
-      Log.info('pc', 'local offer set', Log.sdp(pc.localDescription));
-      await sendSignal({ description: pc.localDescription });
-    } catch (err) {
-      Log.error('pc', 'making offer failed', err);
-    } finally {
-      state.makingOffer = false;
-    }
+  const peer = {
+    id, name, pc, dc: null, polite, waitForOffer, sendPre,
+    makingOffer: false, ignoreOffer: false, settingAnswer: false, restartedIce: false,
+    signalChain: Promise.resolve(),
+    remote: new Map(), remoteMeta: new Map(),
+    incoming: null, volume: 100, wasConnected: false, routeLogged: false,
+    card: makePersonCard(id, name),
   };
+  state.peers.set(id, peer);
+  Log.info('pc', 'created', { peer: id.slice(0, 6), polite, waitForOffer, stunServers: servers.length ? servers[0].urls.length : 0, mode: state.mode });
+
+  pc.onnegotiationneeded = () => negotiate(peer);
   pc.onicecandidate = ({ candidate }) => {
     Log.info('ice', 'local candidate', Log.candidate(candidate));
-    if (candidate) sendSignal({ candidate });
+    if (candidate) sendSignal(peer, { candidate });
   };
   pc.onicecandidateerror = (e) => Log.warn('ice', 'candidate error (often a STUN server not answering)', { url: e.url, code: e.errorCode, text: e.errorText });
-  pc.onicegatheringstatechange = () => Log.info('ice', `gathering ${pc.iceGatheringState}`);
-  pc.oniceconnectionstatechange = () => Log.info('ice', `connection ${pc.iceConnectionState}`);
+  pc.onicegatheringstatechange = () => Log.info('ice', `gathering ${pc.iceGatheringState}`, { peer: id.slice(0, 6) });
+  pc.oniceconnectionstatechange = () => Log.info('ice', `connection ${pc.iceConnectionState}`, { peer: id.slice(0, 6) });
   pc.ontrack = (e) => {
-    Log.info('media', 'remote track', { kind: e.track.kind, stream: e.streams[0] ? e.streams[0].id.slice(0, 8) : 'none' });
-    onRemoteTrack(e);
+    Log.info('media', 'remote track', { peer: id.slice(0, 6), kind: e.track.kind, stream: e.streams[0] ? e.streams[0].id.slice(0, 8) : 'none' });
+    onRemoteTrack(peer, e);
   };
   pc.onconnectionstatechange = () => {
-    Log.info('pc', `connection ${pc.connectionState}`);
-    onConnectionState(pc);
+    Log.info('pc', `connection ${pc.connectionState}`, { peer: id.slice(0, 6) });
+    onConnectionState(peer);
   };
   // Bitrate caps can only be set once a negotiation has finished.
   pc.onsignalingstatechange = () => {
-    Log.info('pc', `signaling ${pc.signalingState}`);
+    Log.info('pc', `signaling ${pc.signalingState}`, { peer: id.slice(0, 6) });
     if (pc.signalingState === 'stable') applySendParams();
   };
 
   // Both sides create the same pre-agreed channel; no extra handshake needed.
-  setupDataChannel(pc.createDataChannel('main', { negotiated: true, id: 0, ordered: true }));
+  setupDataChannel(peer, pc.createDataChannel('main', { negotiated: true, id: 0, ordered: true }));
 
   if (state.mic) for (const t of state.mic.getTracks()) pc.addTrack(t, state.mic);
   for (const kind of ['screen', 'media']) {
     const s = state[kind];
-    if (s) s.senders = s.stream.getTracks().map((t) => pc.addTrack(t, s.stream));
+    if (s) s.senders.set(id, s.stream.getTracks().map((t) => pc.addTrack(t, s.stream)));
   }
-  setStatus('Connecting directly to your friend…', 'wait');
+  updatePeopleLayout();
+  return peer;
 }
 
-async function onSignal({ description, candidate }) {
-  if (!state.pc) {
-    // Ignore stray messages from a connection that already ended.
-    if (!description || description.type !== 'offer') {
-      Log.info('signal', 'ignored, no connection', description ? description.type : 'candidate');
+async function negotiate(peer) {
+  const { pc } = peer;
+  // A side that answers a pasted code or a lobby offer never starts the first offer.
+  if (peer.waitForOffer && !dcOpen(peer)) {
+    Log.info('pc', 'negotiation needed, waiting for the other side to offer', { peer: peer.id.slice(0, 6) });
+    return;
+  }
+  Log.info('pc', 'negotiation needed, making offer', { peer: peer.id.slice(0, 6) });
+  try {
+    peer.makingOffer = true;
+    await setLocal(pc);
+    Log.info('pc', 'local offer set', Log.sdp(pc.localDescription));
+    await sendSignal(peer, { description: pc.localDescription });
+  } catch (err) {
+    Log.error('pc', 'making offer failed', err);
+  } finally {
+    peer.makingOffer = false;
+  }
+}
+
+function dcOpen(peer) {
+  return !!peer.dc && peer.dc.readyState === 'open';
+}
+
+function sendSignal(peer, data) {
+  // Once connected, renegotiation (e.g. starting a screen share) goes over
+  // the direct connection itself.
+  if (dcOpen(peer)) {
+    Log.info('signal', `sent ${data.description ? data.description.type : 'candidate'} over the direct connection`, { peer: peer.id.slice(0, 6) });
+    peer.dc.send(JSON.stringify({ type: 'signal', data }));
+    return Promise.resolve();
+  }
+  // Before that, candidates are bundled into the description once gathering
+  // finishes, so only descriptions are sent.
+  if (!data.description) return Promise.resolve();
+  const { pc } = peer;
+  const started = Date.now();
+  return waitForIceGathering(pc).then(async () => {
+    if (state.peers.get(peer.id) !== peer || pc.signalingState === 'closed') {
+      Log.warn('signal', 'connection changed while gathering, not sending');
       return;
     }
-    startPeer(false);
-  }
-  const pc = state.pc;
+    const desc = pc.localDescription;
+    const sent = await peer.sendPre(desc);
+    Log.info('signal', `sent ${desc.type} before connecting`, { peer: peer.id.slice(0, 6), mode: state.mode, relays: typeof sent === 'number' ? sent : undefined, gatherMs: Date.now() - started, sdp: Log.sdp(desc) });
+    if (sent === 0) Log.error('signal', 'no relay was connected, nothing was sent');
+  });
+}
+
+// No trickle ICE before connecting: each description carries every candidate found.
+function waitForIceGathering(pc) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const done = () => {
+      if (pc.iceGatheringState !== 'complete') return;
+      pc.removeEventListener('icegatheringstatechange', done);
+      resolve();
+    };
+    pc.addEventListener('icegatheringstatechange', done);
+    // Use whatever was found if a STUN server is slow.
+    setTimeout(() => {
+      if (pc.iceGatheringState !== 'complete') Log.warn('ice', 'gathering still running after 5 s, sending what was found so far');
+      resolve();
+    }, 5000);
+  });
+}
+
+function queueSignal(peer, data) {
+  peer.signalChain = peer.signalChain
+    .then(() => onSignal(peer, data))
+    .catch((err) => console.error('signal error', err));
+}
+
+async function onSignal(peer, { description, candidate }) {
+  if (state.peers.get(peer.id) !== peer) return;
+  const { pc } = peer;
   if (description) {
-    Log.info('signal', `received ${description.type}`, Log.sdp(description));
-    const readyForOffer = !state.makingOffer && (pc.signalingState === 'stable' || state.settingAnswer);
+    Log.info('signal', `received ${description.type}`, { peer: peer.id.slice(0, 6), sdp: Log.sdp(description) });
+    const readyForOffer = !peer.makingOffer && (pc.signalingState === 'stable' || peer.settingAnswer);
     const collision = description.type === 'offer' && !readyForOffer;
-    state.ignoreOffer = !state.polite && collision;
-    if (state.ignoreOffer) {
+    peer.ignoreOffer = !peer.polite && collision;
+    if (peer.ignoreOffer) {
       Log.info('signal', 'offer collision, ignoring theirs (this side is impolite)');
       return;
     }
     if (collision) Log.info('signal', 'offer collision, rolling back ours (this side is polite)');
-    state.settingAnswer = description.type === 'answer';
+    peer.settingAnswer = description.type === 'answer';
     try {
       await pc.setRemoteDescription(description);
     } catch (err) {
       Log.error('signal', `setting remote ${description.type} failed (signaling ${pc.signalingState})`, err);
       throw err;
     } finally {
-      state.settingAnswer = false;
+      peer.settingAnswer = false;
     }
     if (description.type === 'offer') {
       await setLocal(pc);
       Log.info('pc', 'local answer set', Log.sdp(pc.localDescription));
-      await sendSignal({ description: pc.localDescription });
+      await sendSignal(peer, { description: pc.localDescription });
     }
   } else if (candidate) {
     try {
       await pc.addIceCandidate(candidate);
       Log.info('ice', 'remote candidate added', Log.candidate(candidate));
     } catch (err) {
-      if (!state.ignoreOffer) {
+      if (!peer.ignoreOffer) {
         Log.warn('ice', 'remote candidate rejected', err);
         throw err;
       }
@@ -620,25 +839,31 @@ async function onSignal({ description, candidate }) {
   }
 }
 
-function onConnectionState(pc) {
-  if (pc !== state.pc) return;
+function onConnectionState(peer) {
+  if (state.peers.get(peer.id) !== peer) return;
+  const { pc } = peer;
   switch (pc.connectionState) {
     case 'connected':
+      peer.wasConnected = true;
+      peer.card.classList.remove('waiting');
+      peer.card.classList.add('connected');
       setLive(true);
-      setStatus('Connected directly', 'ok');
       updateRoute();
       clearInterval(state.statsTimer);
       state.statsTimer = setInterval(updateRoute, 2000);
       break;
     case 'disconnected':
-      setStatus('Connection interrupted. Trying to recover…', 'warn');
+      setStatus(`Connection to ${peer.name} interrupted. Trying to recover…`, 'warn');
       break;
     case 'failed':
       logIceDiagnosis(pc);
-      if (!state.restartedIce) {
-        state.restartedIce = true;
-        setStatus('Connection failed. Retrying…', 'warn');
+      if (!peer.restartedIce) {
+        peer.restartedIce = true;
+        setStatus(`Connection to ${peer.name} failed. Retrying…`, 'warn');
         pc.restartIce();
+      } else if (state.mode === 'lobby') {
+        toast(`Couldn't keep a direct connection to ${peer.name}.`, 'err');
+        removePeer(peer, 'failed');
       } else {
         setStatus('No direct route found. A strict firewall or NAT is blocking it, and no relay is used by design.', 'err');
       }
@@ -646,31 +871,45 @@ function onConnectionState(pc) {
   }
 }
 
+function pcSummary(pc) {
+  return { signaling: pc.signalingState, ice: pc.iceConnectionState, gathering: pc.iceGatheringState, connection: pc.connectionState };
+}
+
 async function updateRoute() {
-  const pc = state.pc;
-  if (!pc || pc.connectionState !== 'connected') return;
-  const stats = await pc.getStats();
-  let pair;
-  stats.forEach((r) => {
-    if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId);
-  });
-  if (!pair) stats.forEach((r) => {
-    if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r;
-  });
-  if (!pair) return;
-  const local = stats.get(pair.localCandidateId);
-  if (!state.routeLogged) {
-    const remote = stats.get(pair.remoteCandidateId);
-    state.routeLogged = true;
-    Log.info('ice', 'connected route', {
-      local: local && `${local.candidateType} ${local.protocol} ${Log.ipKind(local.address || local.ip)}`,
-      remote: remote && `${remote.candidateType} ${remote.protocol} ${Log.ipKind(remote.address || remote.ip)}`,
-      rttMs: pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) : null,
+  const connected = [...state.peers.values()].filter((p) => p.pc.connectionState === 'connected');
+  if (!connected.length) return;
+  const details = [];
+  for (const peer of connected) {
+    const stats = await peer.pc.getStats();
+    let pair;
+    stats.forEach((r) => {
+      if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId);
     });
+    if (!pair) stats.forEach((r) => {
+      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') pair = r;
+    });
+    if (!pair) continue;
+    const local = stats.get(pair.localCandidateId);
+    if (!peer.routeLogged) {
+      const remote = stats.get(pair.remoteCandidateId);
+      peer.routeLogged = true;
+      Log.info('ice', 'connected route', {
+        peer: peer.id.slice(0, 6),
+        local: local && `${local.candidateType} ${local.protocol} ${Log.ipKind(local.address || local.ip)}`,
+        remote: remote && `${remote.candidateType} ${remote.protocol} ${Log.ipKind(remote.address || remote.ip)}`,
+        rttMs: pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) : null,
+      });
+    }
+    details.push({ lan: local && local.candidateType === 'host', rtt: pair.currentRoundTripTime });
   }
-  const where = local && local.candidateType === 'host' ? 'on your network' : 'over the internet';
-  const rtt = pair.currentRoundTripTime != null ? `${Math.round(pair.currentRoundTripTime * 1000)} ms ` : '';
-  setStatus('Connected directly', 'ok', `${rtt}${where}`);
+  if (!details.length) return;
+  if (connected.length === 1) {
+    const d = details[0];
+    const rtt = d.rtt != null ? `${Math.round(d.rtt * 1000)} ms ` : '';
+    setStatus('Connected directly', 'ok', `${rtt}${d.lan ? 'on your network' : 'over the internet'}`);
+  } else {
+    setStatus('Connected directly', 'ok', `to ${connected.length} people`);
+  }
 }
 
 // When a connection fails, record which candidate kinds each side had and how the checks went.
@@ -691,42 +930,50 @@ async function logIceDiagnosis(pc) {
   }
 }
 
-function teardownPeer() {
-  if (state.pc) Log.info('pc', 'closing connection');
-  state.routeLogged = false;
-  clearInterval(state.statsTimer);
-  setLive(false);
-  endSession();
-  if (state.dc) state.dc.close();
-  if (state.pc) state.pc.close();
-  state.pc = null;
-  state.dc = null;
-  state.makingOffer = state.ignoreOffer = state.settingAnswer = false;
-  state.signalChain = Promise.resolve();
-  for (const id of [...state.remote.keys()]) removeRemoteStream(id);
-  state.remoteMeta.clear();
-  for (const kind of ['screen', 'media']) if (state[kind]) state[kind].senders = [];
-  if (state.incoming) state.incoming.card.fail('Transfer interrupted');
-  state.incoming = null;
-  state.peerName = '';
-  const card = $('#peerCard');
-  card.classList.add('waiting');
-  card.querySelector('.label').textContent = 'Waiting for your friend';
-  card.querySelector('.initial').textContent = '';
-  card.querySelector('.micoff').hidden = true;
-  detachMeter(card);
-  setChatEnabled(false);
+// reason: 'left' | 'removed' | 'failed' | 'replaced' | 'retry' | 'leaving'
+function removePeer(peer, reason) {
+  if (state.peers.get(peer.id) !== peer) return;
+  Log.info('pc', 'closing connection', { peer: peer.id.slice(0, 6), reason });
+  state.peers.delete(peer.id);
+  if (peer.dc) peer.dc.close();
+  peer.pc.close();
+  for (const id of [...peer.remote.keys()]) removeRemoteStream(peer, id);
+  if (peer.incoming) peer.incoming.card.fail('Transfer interrupted');
+  for (const kind of ['screen', 'media']) if (state[kind]) state[kind].senders.delete(peer.id);
+  detachMeter(peer.card);
+  peer.card.remove();
+  if (!state.peers.size) {
+    setLive(false);
+    clearInterval(state.statsTimer);
+  }
+  updatePeopleLayout();
+  renderLobby();
+  setChatEnabled([...state.peers.values()].some(dcOpen));
+  if (state.mode === 'lobby' && !state.peers.size && reason !== 'leaving') {
+    setStatus('Waiting for people to join', 'wait');
+  }
 }
 
 function leave() {
-  Log.info('call', 'leaving', { connected: isConnected(), session: state.session ? state.session.role : 'none' });
+  Log.info('call', 'leaving', { mode: state.mode, peers: state.peers.size });
   exitFocus();
-  sendDC({ type: 'bye' });
+  broadcast({ type: 'bye' });
   // Stop ringing your friend if they never picked up.
   const s = state.session;
   if (s && !isConnected() && state.pool) state.pool.send(s.friend, { type: 'cancel', sid: s.sid });
-  endSession();
-  teardownPeer();
+  stopRinging();
+  state.session = null;
+  for (const peer of [...state.peers.values()]) removePeer(peer, 'leaving');
+  const lobby = state.lobby;
+  if (lobby) {
+    clearTimeout(lobby.announceTimer);
+    clearTimeout(lobby.timeout);
+    if (state.pool) state.pool.removeChannel(lobby.channel);
+  }
+  state.lobby = null;
+  state.mode = null;
+  state.codesRole = null;
+  renderLobby();
   stopLocal('screen');
   stopLocal('media');
   if (state.mic) state.mic.getTracks().forEach((t) => t.stop());
@@ -740,52 +987,134 @@ function leave() {
   detachMeter($('#meCard'));
   if (state.audioCtx) state.audioCtx.close();
   state.audioCtx = null;
-  $('#messages').innerHTML = '<p class="empty">Messages and files go straight to your friend and aren\'t saved anywhere. Drop files here to send them.</p>';
+  $('#messages').innerHTML = '<p class="empty">Messages and files go straight to the people in the call and aren\'t saved anywhere. Drop files here to send them.</p>';
+  setLive(false);
   showScreen('join');
+  if (!Rendezvous.friends().length && state.pool) {
+    state.pool.close();
+    state.pool = null;
+  }
   renderFriends();
 }
 
 // ===================================================================
-// Data channel: chat, file transfer and call metadata
+// People on the stage
 // ===================================================================
-function setupDataChannel(dc) {
-  state.dc = dc;
+function makePersonCard(id, name) {
+  const card = $('#personTpl').content.firstElementChild.cloneNode(true);
+  card.dataset.peer = id;
+  card.classList.add('waiting'); // until the connection is up
+  card.querySelector('.label').textContent = name;
+  card.querySelector('.initial').textContent = initial(name);
+  const vol = card.querySelector('.peer-vol input');
+  vol.value = 100;
+  vol.setAttribute('aria-label', `${name}'s volume`);
+  syncSlider(vol, 100);
+  vol.oninput = () => {
+    const peer = state.peers.get(id);
+    if (!peer) return;
+    peer.volume = Number(vol.value);
+    syncSlider(vol);
+    applyVolumes();
+  };
+  card.querySelector('.kick').onclick = () => {
+    const peer = state.peers.get(id);
+    if (peer) kickPeer(peer);
+  };
+  $('.people').insertBefore(card, $('#peerCard'));
+  return card;
+}
+
+function setPeerName(peer, name) {
+  peer.name = String(name || '').slice(0, 32) || peer.name;
+  peer.card.querySelector('.label').textContent = peer.name;
+  peer.card.querySelector('.initial').textContent = initial(peer.name);
+  peer.card.querySelector('.peer-vol input').setAttribute('aria-label', `${peer.name}'s volume`);
+  for (const id of peer.remote.keys()) renderRemoteStream(peer, id);
+}
+
+function updatePeopleLayout() {
+  const n = state.peers.size;
+  const placeholder = $('#peerCard');
+  placeholder.hidden = n > 0;
+  placeholder.querySelector('.label').textContent = state.mode === 'lobby' ? 'Waiting for people to join' : 'Waiting for your friend';
+  // The line between avatars only makes sense for two people.
+  $('.link').hidden = n > 1;
+  $('.people').classList.toggle('many', n > 1);
+  $('.people').classList.toggle('crowd', n > 3);
+}
+
+// ===================================================================
+// Data channel: chat, file transfer and call metadata (one per peer)
+// ===================================================================
+function setupDataChannel(peer, dc) {
+  peer.dc = dc;
   dc.binaryType = 'arraybuffer';
   dc.bufferedAmountLowThreshold = FILE_BUFFER_LOW;
   dc.onopen = () => {
-    Log.info('dc', 'direct channel open');
-    stopRinging();
+    Log.info('dc', 'direct channel open', { peer: peer.id.slice(0, 6) });
+    if (state.session) stopRinging();
+    if (state.lobby) clearTimeout(state.lobby.timeout);
     showScreen('call');
-    sendDC({ type: 'hello', name: state.name, muted: state.muted });
-    // Swap identity keys over this direct, encrypted channel so the two of
-    // you can find each other again later without codes.
-    Rendezvous.identity().then((me) => sendDC({ type: 'pair', pub: me.pub, name: state.name }))
-      .catch((err) => console.warn('pairing unavailable', err));
+    sendTo(peer, { type: 'hello', name: state.name, muted: state.muted });
+    // 1:1 calls swap identity keys over this direct, encrypted channel so you
+    // can find each other again later without codes. Lobbies don't.
+    if (state.mode !== 'lobby') {
+      Rendezvous.identity().then((me) => sendTo(peer, { type: 'pair', pub: me.pub, name: state.name }))
+        .catch((err) => console.warn('pairing unavailable', err));
+    }
+    if (state.lobby && state.lobby.hostId === state.myId) {
+      sendTo(peer, { type: 'lobby', hostId: state.myId, locked: state.lobby.locked });
+    }
     for (const kind of ['screen', 'media']) {
       const s = state[kind];
-      if (s) sendDC({ type: 'stream', id: s.stream.id, kind, label: s.label });
+      if (s) sendTo(peer, { type: 'stream', id: s.stream.id, kind, label: s.label });
     }
     setChatEnabled(true);
+    renderLobby();
   };
   dc.onclose = () => {
-    Log.info('dc', 'direct channel closed');
-    if (dc === state.dc) setChatEnabled(false);
+    Log.info('dc', 'direct channel closed', { peer: peer.id.slice(0, 6) });
+    if (state.peers.get(peer.id) !== peer) return;
+    setChatEnabled([...state.peers.values()].some(dcOpen));
+    // The other side closed the window without saying goodbye.
+    if (peer.wasConnected) onPeerGone(peer, 'left');
   };
   dc.onerror = (e) => Log.warn('dc', 'channel error', e.error ? e.error.message : 'unknown');
   dc.onmessage = (e) => {
-    if (typeof e.data === 'string') onDataMessage(JSON.parse(e.data));
-    else onFileChunk(e.data);
+    if (typeof e.data === 'string') onDataMessage(peer, JSON.parse(e.data));
+    else onFileChunk(peer, e.data);
   };
 }
 
-function sendDC(msg) {
-  if (state.dc && state.dc.readyState === 'open') state.dc.send(JSON.stringify(msg));
+function sendTo(peer, msg) {
+  if (dcOpen(peer)) peer.dc.send(JSON.stringify(msg));
 }
 
-function onDataMessage(msg) {
+function broadcast(msg) {
+  for (const peer of state.peers.values()) sendTo(peer, msg);
+}
+
+// Someone hung up or vanished: a 1:1 call ends, a lobby carries on.
+function onPeerGone(peer, reason) {
+  if (state.peers.get(peer.id) !== peer) return;
+  const who = peer.name || 'Your friend';
+  if (state.mode === 'lobby') {
+    removePeer(peer, reason);
+    addSystem(`${who} left`);
+    toast(`${who} left the lobby`);
+    return;
+  }
+  peer.dc = null;
+  leave();
+  toast(`${who} left the call`);
+}
+
+function onDataMessage(peer, msg) {
   switch (msg.type) {
     case 'pair':
-      Rendezvous.pair(msg.pub, state.peerName || msg.name).then(({ friend, isNew }) => {
+      if (state.mode === 'lobby') break;
+      Rendezvous.pair(msg.pub, peer.name || msg.name).then(({ friend, isNew }) => {
         Log.info('pair', isNew ? 'saved new friend' : 'refreshed saved friend', { friend: friend.id.slice(0, 6) });
         if (isNew) toast(`${friend.name} is saved. Next time, just press Call.`);
         if (state.pool) state.pool.refreshTopics(true);
@@ -799,67 +1128,78 @@ function onDataMessage(msg) {
         }
       });
       break;
-    case 'hello': {
-      state.peerName = String(msg.name || 'Peer').slice(0, 32);
-      const card = $('#peerCard');
-      card.classList.remove('waiting');
-      card.querySelector('.label').textContent = state.peerName;
-      card.querySelector('.initial').textContent = initial(state.peerName);
-      card.querySelector('.micoff').hidden = !msg.muted;
-      addSystem(`${state.peerName} joined`);
-      for (const id of state.remote.keys()) renderRemoteStream(id);
+    case 'hello':
+      setPeerName(peer, msg.name || 'Someone');
+      peer.card.querySelector('.micoff').hidden = !msg.muted;
+      addSystem(`${peer.name} joined`);
       break;
-    }
     case 'signal':
-      queueSignal(msg.data);
+      queueSignal(peer, msg.data);
       break;
     case 'codec':
       onPeerCodec(String(msg.codec));
       break;
     case 'name':
-      state.peerName = String(msg.name || '').slice(0, 32) || state.peerName;
-      $('#peerCard .label').textContent = state.peerName;
-      $('#peerCard .initial').textContent = initial(state.peerName);
+      setPeerName(peer, msg.name);
       break;
     case 'mute':
-      $('#peerCard .micoff').hidden = !msg.muted;
+      peer.card.querySelector('.micoff').hidden = !msg.muted;
       break;
     case 'chat':
-      addChat(state.peerName || 'Peer', String(msg.text), false);
+      addChat(peer.name || 'Someone', String(msg.text), false);
       break;
     case 'stream':
-      state.remoteMeta.set(msg.id, { kind: msg.kind, label: String(msg.label || '') });
-      if (state.remote.has(msg.id)) renderRemoteStream(msg.id);
+      peer.remoteMeta.set(msg.id, { kind: msg.kind, label: String(msg.label || '') });
+      if (peer.remote.has(msg.id)) renderRemoteStream(peer, msg.id);
       break;
     case 'stream-end':
-      state.remoteMeta.delete(msg.id);
-      removeRemoteStream(msg.id);
+      peer.remoteMeta.delete(msg.id);
+      removeRemoteStream(peer, msg.id);
       break;
     case 'file-start':
-      state.incoming = {
+      peer.incoming = {
         ...msg,
         chunks: [],
         received: 0,
-        card: addFileCard(state.peerName || 'Peer', msg.name, msg.size, false),
+        card: addFileCard(peer.name || 'Someone', msg.name, msg.size, false),
       };
       break;
     case 'file-end': {
-      const inc = state.incoming;
+      const inc = peer.incoming;
       if (!inc) break;
-      state.incoming = null;
+      peer.incoming = null;
       // Only preview plain image types; everything else is a download, never rendered.
       const safe = /^image\/(png|jpe?g|gif|webp|avif|bmp)$/.test(inc.mime) ? inc.mime : 'application/octet-stream';
       inc.card.complete(new Blob(inc.chunks, { type: safe }));
       break;
     }
-    case 'bye': {
-      // Your friend hung up: end the call here too and go back to your friends list.
-      const who = state.peerName || 'Your friend';
-      state.dc = null;
-      leave();
-      toast(`${who} left the call`);
+    case 'lobby':
+      // Only the person who created the lobby sends this.
+      if (state.lobby && (!state.lobby.hostId || state.lobby.hostId === msg.hostId) && msg.hostId === peer.id) {
+        state.lobby.hostId = msg.hostId;
+        if (state.lobby.locked !== !!msg.locked) addSystem(msg.locked ? 'The host locked the lobby' : 'The host unlocked the lobby');
+        state.lobby.locked = !!msg.locked;
+        renderLobby();
+      }
       break;
-    }
+    case 'kick':
+      if (!state.lobby || state.lobby.hostId !== peer.id) break; // only the host can remove people
+      if (msg.id === state.myId) {
+        leave();
+        toast('The host removed you from the lobby', 'err');
+      } else {
+        state.lobby.blocked.add(String(msg.id));
+        const gone = state.peers.get(String(msg.id));
+        if (gone) {
+          addSystem(`${gone.name} was removed`);
+          removePeer(gone, 'removed');
+        }
+      }
+      break;
+    case 'bye':
+      peer.wasConnected = false; // don't also treat the channel closing as a second leave
+      onPeerGone(peer, 'left');
+      break;
   }
 }
 
@@ -868,8 +1208,8 @@ function initChat() {
   $('#chatForm').onsubmit = (e) => {
     e.preventDefault();
     const text = $('#chatInput').value.trim();
-    if (!text || !state.dc || state.dc.readyState !== 'open') return;
-    sendDC({ type: 'chat', text });
+    if (!text || ![...state.peers.values()].some(dcOpen)) return;
+    broadcast({ type: 'chat', text });
     addChat(state.name, text, true);
     $('#chatInput').value = '';
   };
@@ -892,7 +1232,7 @@ function initChat() {
   side.ondrop = (e) => {
     e.preventDefault();
     side.classList.remove('drag');
-    if (!state.dc || state.dc.readyState !== 'open') return toast('Files can be sent once your friend connects');
+    if (![...state.peers.values()].some(dcOpen)) return toast('Files can be sent once someone is connected');
     for (const f of e.dataTransfer.files) queueFile(f);
   };
 }
@@ -921,7 +1261,7 @@ function setChatEnabled(on) {
   $('#chatInput').disabled = !on;
   $('#sendBtn').disabled = !on;
   $('#attachBtn').disabled = !on;
-  $('#chatInput').placeholder = on ? 'Message' : 'Waiting for your friend';
+  $('#chatInput').placeholder = on ? 'Message' : state.mode === 'lobby' ? 'Waiting for people to join' : 'Waiting for your friend';
 }
 
 function messageShell(author, mine, bubbleClass) {
@@ -956,23 +1296,39 @@ function appendMessage(el) {
   if (atBottom) box.scrollTop = box.scrollHeight;
 }
 
-// ---------- file transfer ----------
+// ---------- file transfer: sent to everyone connected, one after another ----------
 function queueFile(file) {
   const card = addFileCard(state.name, file.name, file.size, true);
   card.setStatus('Queued');
-  state.fileChain = state.fileChain.then(() => sendFile(file, card)).catch((err) => {
+  state.fileChain = state.fileChain.then(() => sendFileToAll(file, card)).catch((err) => {
     console.warn('file send failed', err);
     card.fail('Not sent, the connection closed');
   });
 }
 
-async function sendFile(file, card) {
-  const dc = state.dc;
-  if (!dc || dc.readyState !== 'open') throw new Error('channel closed');
-  const max = state.pc && state.pc.sctp && state.pc.sctp.maxMessageSize;
+async function sendFileToAll(file, card) {
+  const targets = [...state.peers.values()].filter(dcOpen);
+  if (!targets.length) throw new Error('nobody connected');
+  let delivered = 0;
+  for (const [i, peer] of targets.entries()) {
+    try {
+      await sendFile(peer, file, (p) => card.progress((i + p) / targets.length));
+      delivered++;
+    } catch (err) {
+      Log.warn('files', 'sending to one person failed', { peer: peer.id.slice(0, 6), error: err.message });
+    }
+  }
+  if (!delivered) throw new Error('not delivered');
+  card.complete(file);
+  if (delivered < targets.length) card.setStatus(`Sent to ${delivered} of ${targets.length}`);
+}
+
+async function sendFile(peer, file, onProgress) {
+  const dc = peer.dc;
+  if (!dcOpen(peer)) throw new Error('channel closed');
+  const max = peer.pc.sctp && peer.pc.sctp.maxMessageSize;
   const chunkSize = Math.min(64 * 1024, max || 16 * 1024);
   dc.send(JSON.stringify({ type: 'file-start', name: file.name, size: file.size, mime: file.type }));
-  card.setStatus('Sending');
   let offset = 0;
   while (offset < file.size) {
     if (dc.readyState !== 'open') throw new Error('channel closed');
@@ -986,14 +1342,13 @@ async function sendFile(file, card) {
     const buf = await file.slice(offset, offset + chunkSize).arrayBuffer();
     dc.send(buf);
     offset += buf.byteLength;
-    card.progress(offset / file.size);
+    onProgress(offset / file.size);
   }
   dc.send(JSON.stringify({ type: 'file-end' }));
-  card.complete(file);
 }
 
-function onFileChunk(buf) {
-  const inc = state.incoming;
+function onFileChunk(peer, buf) {
+  const inc = peer.incoming;
   if (!inc) return;
   inc.chunks.push(buf);
   inc.received += buf.byteLength;
@@ -1051,7 +1406,7 @@ function addFileCard(author, name, size, mine) {
 }
 
 // ===================================================================
-// Local media: mic, screen share, file streaming
+// Local media: mic, screen share, file streaming (sent to every peer)
 // ===================================================================
 function initControls() {
   $('#micBtn').onclick = toggleMute;
@@ -1071,7 +1426,7 @@ function toggleMute() {
   $('#micBtn').classList.toggle('muted', state.muted);
   applyMicEnabled(); // also sets the button's label
   $('#meCard .micoff').hidden = !state.muted;
-  sendDC({ type: 'mute', muted: state.muted });
+  broadcast({ type: 'mute', muted: state.muted });
 }
 
 async function toggleScreen() {
@@ -1088,7 +1443,7 @@ async function toggleScreen() {
     if ('contentHint' in video) video.contentHint = 'detail';
     video.addEventListener('ended', () => { if (state.screen && state.screen.stream === stream) stopLocal('screen'); });
   }
-  state.screen = { stream, senders: [], label: 'Screen' };
+  state.screen = { stream, senders: new Map(), label: 'Screen' };
   const tile = makeTile({ title: 'Your screen', remote: false });
   tile.video.muted = true;
   tile.video.srcObject = stream;
@@ -1119,9 +1474,9 @@ async function streamFile(file) {
     return toast('This browser cannot stream media files. Try Chrome or Edge.', 'err');
   }
   // The browser drops captured tracks when a file ends, so we keep one stable
-  // stream for the peer and swap in freshly captured tracks on every play.
+  // stream for everyone and swap in freshly captured tracks on every play.
   const stream = new MediaStream();
-  state.media = { stream, senders: [], label: file.name, el, url, tile: tile.el };
+  state.media = { stream, senders: new Map(), label: file.name, el, url, tile: tile.el };
   if (/^audio\//.test(file.type)) tile.el.classList.add('audio-only');
   const useTrack = (track) => {
     const media = state.media;
@@ -1132,10 +1487,12 @@ async function streamFile(file) {
       old.stop();
     }
     stream.addTrack(track);
-    if (!state.pc) return;
-    const sender = media.senders.find((s) => s.track && s.track.kind === track.kind);
-    if (sender) sender.replaceTrack(track);
-    else media.senders.push(state.pc.addTrack(track, stream));
+    for (const peer of state.peers.values()) {
+      const list = media.senders.get(peer.id) || [];
+      const sender = list.find((s) => s.track && s.track.kind === track.kind);
+      if (sender) sender.replaceTrack(track);
+      else media.senders.set(peer.id, [...list, peer.pc.addTrack(track, stream)]);
+    }
   };
   const recapture = () => {
     const fresh = capture.call(el);
@@ -1151,20 +1508,23 @@ async function streamFile(file) {
 
 function publish(kind) {
   const s = state[kind];
-  sendDC({ type: 'stream', id: s.stream.id, kind, label: s.label });
-  if (state.pc) s.senders = s.stream.getTracks().map((t) => state.pc.addTrack(t, s.stream));
+  broadcast({ type: 'stream', id: s.stream.id, kind, label: s.label });
+  for (const peer of state.peers.values()) {
+    s.senders.set(peer.id, s.stream.getTracks().map((t) => peer.pc.addTrack(t, s.stream)));
+  }
 }
 
 function stopLocal(kind) {
   const s = state[kind];
   if (!s) return;
   state[kind] = null;
-  if (state.pc && state.pc.signalingState !== 'closed') {
-    for (const sender of s.senders) {
-      try { state.pc.removeTrack(sender); } catch { /* already gone */ }
+  for (const peer of state.peers.values()) {
+    if (peer.pc.signalingState === 'closed') continue;
+    for (const sender of s.senders.get(peer.id) || []) {
+      try { peer.pc.removeTrack(sender); } catch { /* already gone */ }
     }
   }
-  sendDC({ type: 'stream-end', id: s.stream.id });
+  broadcast({ type: 'stream-end', id: s.stream.id });
   s.stream.getTracks().forEach((t) => t.stop());
   if (s.el) { s.el.pause(); s.el.removeAttribute('src'); s.el.load(); }
   if (s.url) URL.revokeObjectURL(s.url);
@@ -1185,24 +1545,24 @@ function stopLocal(kind) {
 // ===================================================================
 // Remote media
 // ===================================================================
-function onRemoteTrack(e) {
+function onRemoteTrack(peer, e) {
   const stream = e.streams[0] || new MediaStream([e.track]);
-  if (!state.remote.has(stream.id)) {
-    state.remote.set(stream.id, { stream });
+  if (!peer.remote.has(stream.id)) {
+    peer.remote.set(stream.id, { stream });
     stream.addEventListener('removetrack', () => {
-      if (stream.getTracks().length === 0) removeRemoteStream(stream.id);
+      if (stream.getTracks().length === 0) removeRemoteStream(peer, stream.id);
     });
   }
-  renderRemoteStream(stream.id);
+  renderRemoteStream(peer, stream.id);
 }
 
-function renderRemoteStream(id) {
-  const entry = state.remote.get(id);
+function renderRemoteStream(peer, id) {
+  const entry = peer.remote.get(id);
   if (!entry) return;
   const { stream } = entry;
-  const meta = state.remoteMeta.get(id);
+  const meta = peer.remoteMeta.get(id);
   const hasVideo = stream.getVideoTracks().length > 0;
-  // The peer's microphone is the audio-only stream without screen/media metadata.
+  // Their microphone is the audio-only stream without screen/media metadata.
   const kind = meta ? meta.kind : hasVideo ? 'screen' : 'mic';
 
   if (kind === 'mic') {
@@ -1211,9 +1571,9 @@ function renderRemoteStream(id) {
       entry.audio.autoplay = true;
       entry.audio.srcObject = stream;
       applySpeaker(entry.audio);
-      entry.audio.volume = settings.voiceVolume / 100;
+      entry.audio.volume = voiceVolumeFor(peer);
       entry.audio.play().catch(() => toast('Click anywhere to enable call audio.'));
-      refreshPeerMeter();
+      refreshPeerMeter(peer);
     }
     return;
   }
@@ -1221,9 +1581,9 @@ function renderRemoteStream(id) {
   if (entry.audio) {
     entry.audio.srcObject = null;
     entry.audio = null;
-    refreshPeerMeter();
+    refreshPeerMeter(peer);
   }
-  const who = state.peerName || 'Your friend';
+  const who = peer.name || 'Someone';
   const title = kind === 'media' ? `${who} is streaming: ${meta.label}` : `${who}'s screen`;
   if (!entry.tile) {
     const tile = makeTile({ title, remote: true });
@@ -1237,19 +1597,24 @@ function renderRemoteStream(id) {
   entry.tile.el.classList.toggle('audio-only', !hasVideo);
 }
 
-function removeRemoteStream(id) {
-  const entry = state.remote.get(id);
+function removeRemoteStream(peer, id) {
+  const entry = peer.remote.get(id);
   if (!entry) return;
-  state.remote.delete(id);
+  peer.remote.delete(id);
   if (entry.audio) {
     entry.audio.srcObject = null;
-    refreshPeerMeter();
+    entry.audio = null;
+    refreshPeerMeter(peer);
   }
   if (entry.tile) {
     if (state.focusTile === entry.tile.el) exitFocus();
     entry.tile.el.remove();
   }
   updateStageLayout();
+}
+
+function voiceVolumeFor(peer) {
+  return (settings.voiceVolume / 100) * (peer.volume / 100);
 }
 
 // ---------- full screen: one stream fills the screen, controls fade in on mouse move ----------
@@ -1292,7 +1657,7 @@ function initFocus() {
   $('#exitFocus').onclick = exitFocus;
 }
 
-// ---------- the hub: link between you, call timer, quick actions ----------
+// ---------- the hub: the people, call timer, quick actions ----------
 function setLive(on) {
   const hub = $('#hub');
   if (on === hub.classList.contains('live')) return;
@@ -1332,7 +1697,8 @@ function makeTile({ title, remote }) {
   el.querySelector('.actions').append(full);
   video.addEventListener('dblclick', () => {
     if (!video.controls) $('.stage-wrap').classList.contains('focus') ? exitFocus() : enterFocus(el);
-  });  new MutationObserver(() => {
+  });
+  new MutationObserver(() => {
     const audioOnly = el.classList.contains('audio-only');
     el.querySelector('.audio-art').hidden = !audioOnly;
     full.hidden = audioOnly;
@@ -1345,12 +1711,11 @@ function makeTile({ title, remote }) {
   return { el, video, setTitle: (t) => { titleEl.textContent = t; } };
 }
 
-// The peer card's speaking ring follows whichever remote stream is their mic.
-function refreshPeerMeter() {
-  const card = $('#peerCard');
-  detachMeter(card);
-  for (const entry of state.remote.values()) {
-    if (entry.audio) return attachMeter(card, entry.stream);
+// Each person's speaking ring follows whichever of their streams is their mic.
+function refreshPeerMeter(peer) {
+  detachMeter(peer.card);
+  for (const entry of peer.remote.values()) {
+    if (entry.audio) return attachMeter(peer.card, entry.stream);
   }
 }
 
@@ -1397,7 +1762,7 @@ function tickMeters() {
 // Helpers
 // ===================================================================
 function isConnected() {
-  return !!state.pc && state.pc.connectionState === 'connected';
+  return [...state.peers.values()].some((p) => p.pc.connectionState === 'connected');
 }
 
 function iceServers() {
@@ -1426,10 +1791,9 @@ function label(btn, text) {
   btn.title = text;
 }
 
-// Start a new offer, e.g. after the codec changed.
+// Start new offers, e.g. after the codec changed.
 function renegotiate() {
-  const pc = state.pc;
-  if (pc && pc.onnegotiationneeded) pc.onnegotiationneeded();
+  for (const peer of state.peers.values()) negotiate(peer);
 }
 
 function toast(text, kind = '') {
@@ -1446,7 +1810,7 @@ function randomId() {
 }
 
 function initial(name) {
-  return (name.trim()[0] || '?').toUpperCase();
+  return (String(name || '').trim()[0] || '?').toUpperCase();
 }
 
 function clock() {
@@ -1472,14 +1836,17 @@ function save(key, value) {
 // Browsers may block audio until the user interacts with the page.
 document.addEventListener('click', () => {
   if (state.audioCtx && state.audioCtx.state === 'suspended') state.audioCtx.resume();
-  for (const { audio } of state.remote.values()) if (audio && audio.paused) audio.play().catch(() => {});
+  for (const peer of state.peers.values()) {
+    for (const { audio } of peer.remote.values()) if (audio && audio.paused) audio.play().catch(() => {});
+  }
 });
-window.addEventListener('beforeunload', () => sendDC({ type: 'bye' }));
+window.addEventListener('beforeunload', () => broadcast({ type: 'bye' }));
 
 initSettings();
 initExtras();
 initFocus();
 initJoin();
 initManual();
+initLobby();
 initChat();
 initControls();

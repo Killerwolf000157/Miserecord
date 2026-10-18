@@ -50,6 +50,10 @@ Discord's quality caps and no middleman. Media stays direct peer to peer.
 
 ## 4. Later / maybe
 
+- [x] Group calls with shareable lobby codes (up to 8 people, mesh)
+- [ ] "Save as friend" for people met in a lobby
+- [ ] Bigger groups via one person relaying streams (optional SFU-style mode)
+
 - [ ] Message history saved locally between calls
 - [ ] Optional sound or notification for incoming calls (quiet by default)
 - [ ] Native encoder (Go/Rust WebRTC with direct GPU encoding: NVENC/AMF, HEVC/AV1) if Electron quality still isn't enough

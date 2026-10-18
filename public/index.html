@@ -36,6 +36,19 @@
         </label>
       </div>
 
+      <section class="lobby-start">
+        <h2>Group call</h2>
+        <button class="btn primary big" type="button" id="createLobbyBtn">Create a lobby</button>
+        <div class="group join-code">
+          <label class="field">
+            <span class="field-label">Code</span>
+            <input id="lobbyInput" maxlength="24" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" autocapitalize="characters">
+          </label>
+          <button class="btn small" type="button" id="joinLobbyBtn">Join</button>
+        </div>
+        <p class="hint center-hint">You get one code to share. Anyone who has it can join, up to 8 people.</p>
+      </section>
+
       <section id="friendsSection" class="friends" hidden>
         <div class="section-head">
           <h2>Friends</h2>
@@ -118,6 +131,16 @@
       <span>Miserecord</span>
     </div>
     <div class="top-right">
+      <div class="chip" id="lobbyChip" hidden>
+        <span class="chip-key">Lobby</span><strong id="lobbyCodeChip"></strong>
+        <button type="button" class="chip-btn" id="lobbyCopyChip" title="Copy lobby code" aria-label="Copy lobby code">
+          <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+        </button>
+        <button type="button" class="chip-btn" id="lobbyLock" title="Lock the lobby" aria-label="Lock the lobby" hidden>
+          <svg class="unlocked" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 7.7-1.5"/></svg>
+          <svg class="locked" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+        </button>
+      </div>
       <div id="status" class="status wait" role="status" aria-live="polite">
         <span class="dot"></span><span id="statusText">Connecting…</span><span id="statusDetail" class="detail"></span>
       </div>
@@ -157,11 +180,15 @@
               </div>
             </div>
             <div class="pname"><span class="label">Waiting for your friend</span></div>
-            <label class="peer-vol" title="Your friend's voice volume">
-              <svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>
-              <input type="range" class="slider" id="peerVol" min="0" max="100" step="1" aria-label="Your friend's voice volume">
-            </label>
           </div>
+        </div>
+        <div class="lobby-invite" id="lobbyInvite" hidden>
+          <p class="invite-label">Share this code to invite people</p>
+          <div class="invite-code" id="lobbyCodeBig"></div>
+          <button type="button" class="btn pill" id="lobbyCopyBig">
+            <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
+            Copy code
+          </button>
         </div>
         <div class="call-meta"><span id="callTimer" class="timer"></span></div>
         <div class="quick" id="quick" hidden>
@@ -481,6 +508,28 @@
   <span id="updateText">A new version is ready</span>
   <button type="button" class="btn small primary" id="updateRestart">Restart to update</button>
 </div>
+
+<template id="personTpl">
+  <div class="person">
+    <div class="avatar-wrap">
+      <div class="aura" aria-hidden="true"></div>
+      <div class="avatar">
+        <span class="initial"></span>
+        <span class="micoff" hidden title="Muted">
+          <svg viewBox="0 0 24 24"><path d="M4 4l16 16M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 10.7 5M12 17.5V20"/></svg>
+        </span>
+      </div>
+      <button type="button" class="kick" hidden title="Remove from the lobby" aria-label="Remove from the lobby">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="pname"><span class="label"></span></div>
+    <label class="peer-vol">
+      <svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>
+      <input type="range" class="slider" min="0" max="100" step="1">
+    </label>
+  </div>
+</template>
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
 

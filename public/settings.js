@@ -89,9 +89,9 @@ function shareConstraints() {
 
 // ------------------------------------------------------------------ applying to the call
 
-function senderKind(sender) {
-  if (state.screen && state.screen.senders.includes(sender)) return 'screen';
-  if (state.media && state.media.senders.includes(sender)) return 'media';
+function senderKind(peerId, sender) {
+  if (state.screen && (state.screen.senders.get(peerId) || []).includes(sender)) return 'screen';
+  if (state.media && (state.media.senders.get(peerId) || []).includes(sender)) return 'media';
   return 'mic';
 }
 
@@ -102,14 +102,18 @@ function motionFor(kind) {
 
 // Bitrate caps and how video degrades are set per sender, live.
 async function applySendParams() {
-  const pc = state.pc;
-  if (!pc) return;
+  for (const peer of state.peers.values()) await applySendParamsTo(peer);
+}
+
+async function applySendParamsTo(peer) {
+  const pc = peer.pc;
+  if (pc.signalingState === 'closed') return;
   for (const sender of pc.getSenders()) {
     const track = sender.track;
     if (!track) continue;
     const params = sender.getParameters();
     if (!params.encodings || !params.encodings.length) continue; // not negotiated yet
-    const kind = senderKind(sender);
+    const kind = senderKind(peer.id, sender);
     const enc0 = params.encodings[0];
     if (track.kind === 'audio') {
       enc0.maxBitrate = kind === 'mic' ? VOICE_BITRATE[settings.voice] : Number(settings.streamAudio) * 1000;
@@ -197,17 +201,18 @@ function applySpeaker(el) {
 
 function allRemoteMediaElements() {
   const els = [];
-  for (const entry of state.remote.values()) {
-    if (entry.audio) els.push(entry.audio);
-    if (entry.tile) els.push(entry.tile.video);
+  for (const peer of state.peers.values()) {
+    for (const entry of peer.remote.values()) {
+      if (entry.audio) els.push(entry.audio);
+      if (entry.tile) els.push(entry.tile.video);
+    }
   }
   return els;
 }
 
 // Swap in a new microphone without dropping the call.
 async function restartMic() {
-  const inCall = !!state.pc || !$('#call').hidden || !$('#connect').hidden || !$('#ringing').hidden;
-  if (!inCall) return;
+  if (!state.mode) return; // applies to the next call
   let stream;
   try {
     stream = await getMic();
@@ -217,9 +222,11 @@ async function restartMic() {
   }
   const track = stream.getAudioTracks()[0];
   const old = state.mic;
-  const sender = state.pc && old && state.pc.getSenders().find((s) => s.track && old.getAudioTracks().includes(s.track));
-  if (sender) await sender.replaceTrack(track);
-  else if (state.pc) state.pc.addTrack(track, stream);
+  for (const peer of state.peers.values()) {
+    const sender = old && peer.pc.getSenders().find((s) => s.track && old.getAudioTracks().includes(s.track));
+    if (sender) await sender.replaceTrack(track);
+    else peer.pc.addTrack(track, stream);
+  }
   if (old) old.getTracks().forEach((t) => t.stop());
   state.mic = stream;
   applyMicEnabled();
@@ -263,8 +270,8 @@ function onSettingChanged(key) {
       for (const el of allRemoteMediaElements()) applySpeaker(el);
       break;
     case 'codec':
-      if (state.dc && state.dc.readyState === 'open') {
-        sendDC({ type: 'codec', codec: settings.codec });
+      if (state.peers.size) {
+        broadcast({ type: 'codec', codec: settings.codec });
         renegotiate();
       }
       break;
@@ -322,7 +329,7 @@ function initSettings() {
       state.name = name;
       $('#meCard .label').textContent = name;
       $('#meCard .initial').textContent = initial(name);
-      sendDC({ type: 'name', name });
+      broadcast({ type: 'name', name });
     }
   };
   for (const b of document.querySelectorAll('#sTheme button')) b.onclick = () => { setSetting('theme', b.dataset.value); syncTheme(); };
@@ -528,34 +535,42 @@ function stopMicTest(keepButton = false) {
 // ---------- live stats in the video tab ----------
 async function updateSettingsLive() {
   if (state.mic && !state.testMic && !$('[data-panel="audio"]').hidden) startMicTest();
-  const pc = state.pc;
-  if (!pc || pc.connectionState !== 'connected') {
+  const live = [...state.peers.values()].filter((p) => p.pc.connectionState === 'connected');
+  if (!live.length) {
     $('#sStatsOut').textContent = 'Not in a call';
     $('#sStatsIn').textContent = 'Not in a call';
     return;
   }
-  const stats = await pc.getStats();
   const now = performance.now();
   const prev = state.statsPrev || {};
   const next = {};
   let out = null;
   let inn = null;
-  stats.forEach((r) => {
-    if (r.kind !== 'video') return;
-    if (r.type === 'outbound-rtp' && r.frameWidth) out = r;
-    if (r.type === 'inbound-rtp' && r.frameWidth) inn = r;
-  });
-  const describe = (r, bytesKey) => {
+  let outStats = null;
+  let inStats = null;
+  let sendingTo = 0;
+  for (const peer of live) {
+    const stats = await peer.pc.getStats();
+    let sends = false;
+    stats.forEach((r) => {
+      if (r.kind !== 'video' || !r.frameWidth) return;
+      const tagged = Object.assign(Object.create(r), { key: `${peer.id}:${r.id}` });
+      if (r.type === 'outbound-rtp') { sends = true; if (!out) { out = tagged; outStats = stats; } }
+      if (r.type === 'inbound-rtp' && !inn) { inn = tagged; inStats = stats; }
+    });
+    if (sends) sendingTo++;
+  }
+  const describe = (r, bytesKey, stats) => {
     if (!r) return 'No video';
     const codec = r.codecId && stats.get(r.codecId);
     const name = codec ? codec.mimeType.replace('video/', '') : '';
-    const p = prev[r.id];
-    next[r.id] = { bytes: r[bytesKey], t: now };
+    const p = prev[r.key];
+    next[r.key] = { bytes: r[bytesKey], t: now };
     const mbps = p ? ((r[bytesKey] - p.bytes) * 8) / ((now - p.t) / 1000) / 1e6 : null;
     const fps = r.framesPerSecond ? `${Math.round(r.framesPerSecond)} fps` : '';
     return [`${r.frameWidth}×${r.frameHeight}`, fps, mbps != null ? `${mbps.toFixed(1)} Mbps` : '', name].filter(Boolean).join('  ');
   };
-  $('#sStatsOut').textContent = describe(out, 'bytesSent');
-  $('#sStatsIn').textContent = describe(inn, 'bytesReceived');
+  $('#sStatsOut').textContent = describe(out, 'bytesSent', outStats) + (sendingTo > 1 ? `  to each of ${sendingTo}` : '');
+  $('#sStatsIn').textContent = describe(inn, 'bytesReceived', inStats);
   state.statsPrev = next;
 }

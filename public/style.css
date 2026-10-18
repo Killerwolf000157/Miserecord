@@ -732,3 +732,56 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
 .peer-vol .slider { flex: 0 1 120px; }
 .hub.live #peerCard .peer-vol { display: flex; }
 .stage.has-tiles .peer-vol { display: none !important; }
+
+/* ---------- group calls ---------- */
+.lobby-start { display: grid; gap: 10px; }
+.lobby-start h2 { font-size: 20px; font-weight: 700; letter-spacing: -.025em; padding: 0 4px; }
+.join-code { display: flex; align-items: center; padding-right: 10px; }
+.join-code .field { flex: 1; }
+.join-code input { font-family: var(--font-mono); letter-spacing: .06em; text-transform: uppercase; }
+.join-code input::placeholder { letter-spacing: .04em; }
+
+.chip-key { color: var(--text-2); }
+#lobbyCodeChip { font-family: var(--font-mono); font-size: 12.5px; letter-spacing: .04em; }
+#lobbyLock .locked { display: none; }
+#lobbyLock.on { color: var(--text); background: var(--fill-2); }
+#lobbyLock.on .locked { display: block; }
+#lobbyLock.on .unlocked { display: none; }
+
+.lobby-invite { display: grid; justify-items: center; gap: 10px; margin-top: 4px; }
+.invite-label { margin: 0; font-size: 14px; color: var(--text-2); }
+.invite-code {
+  padding: 14px 22px; border-radius: 18px; background: var(--surface);
+  font: 600 26px/1 var(--font-mono); letter-spacing: .08em; user-select: all;
+}
+.stage.has-tiles .lobby-invite { display: none; }
+
+/* each person's own volume slider, once they're connected */
+.peer-vol { display: none; }
+.person.connected .peer-vol { display: flex; }
+.hub.live #peerCard .peer-vol { display: none; }
+
+/* host can remove people */
+.kick {
+  position: absolute; top: -2px; right: -2px; width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center; border: 0; cursor: pointer;
+  background: var(--surface); color: var(--text-2); box-shadow: 0 0 0 3px var(--stage);
+  opacity: 0; transition: opacity .15s ease;
+}
+.kick svg { width: 14px; height: 14px; }
+.person:hover .kick, .kick:focus-visible { opacity: 1; }
+.kick:hover { color: var(--danger); }
+
+/* several people: smaller avatars that wrap */
+.people.many { flex-wrap: wrap; gap: 28px; max-width: 760px; }
+.people.many .person { width: 150px; }
+.people.many .avatar-wrap { width: 108px; height: 108px; }
+.people.many .avatar { font-size: 42px; }
+.people.crowd { gap: 20px; }
+.people.crowd .person { width: 128px; }
+.people.crowd .avatar-wrap { width: 88px; height: 88px; }
+.people.crowd .avatar { font-size: 34px; }
+.stage.has-tiles .people.many .person { width: auto; }
+.stage.has-tiles .people.many .avatar-wrap { width: 40px; height: 40px; }
+.stage.has-tiles .people.many .avatar { font-size: 17px; }
+.stage.has-tiles .kick { display: none; }

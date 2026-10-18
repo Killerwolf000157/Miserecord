@@ -183,6 +183,38 @@ const Rendezvous = (() => {
   }
 
   // The topic changes every UTC day so relays can't link calls across days.
+  // ---------------------------------------------------------------- lobbies
+  // A lobby code is the secret: its topic and encryption key are derived from it,
+  // so only people who have the code can find the lobby or read its messages.
+  const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'; // no I, L, O, U
+
+  function newLobbyCode() {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    const chars = Array.from(bytes, (b) => CODE_ALPHABET[b & 31]).join(''); // 16 × 5 bits = 80 bits
+    return chars.match(/.{4}/g).join('-');
+  }
+
+  // Accepts pasted codes with spaces, lowercase, or easily confused letters.
+  function normalizeLobbyCode(text) {
+    const clean = String(text || '').toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1').replace(/[^0-9A-Z]/g, '');
+    if (clean.length !== 16 || [...clean].some((c) => !CODE_ALPHABET.includes(c))) return null;
+    return clean.match(/.{4}/g).join('-');
+  }
+
+  // A channel object shaped like a saved friend, so the relay pool can use it.
+  async function lobbyChannel(code) {
+    const hkdf = await subtle.importKey('raw', enc.encode(code), 'HKDF', false, ['deriveBits']);
+    const derive = async (info) => new Uint8Array(await subtle.deriveBits(
+      { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('miserecord lobby v1'), info: enc.encode(info) }, hkdf, 256));
+    return {
+      id: `lobby:${toHex(await derive('lobby id')).slice(0, 12)}`,
+      name: 'Lobby',
+      key: toB64(await derive('message key')),
+      topicSeed: toB64(await derive('topic seed')),
+      lobby: true,
+    };
+  }
+
   async function topicFor(friend, dayOffset = 0) {
     const day = Math.floor(Date.now() / 86400000) + dayOffset;
     return toHex(await sha256(concat(fromB64(friend.topicSeed), enc.encode(`:${day}`)))).slice(0, 40);
@@ -218,6 +250,7 @@ const Rendezvous = (() => {
       this.nostr = newNostrKey();
       this.topics = new Map(); // topic -> friend
       this.closed = false;
+      this.extra = []; // lobby channels
       this.subId = toHex(crypto.getRandomValues(new Uint8Array(8)));
       this.loggedRings = new Set();
     }
@@ -231,7 +264,7 @@ const Rendezvous = (() => {
 
     async refreshTopics(resubscribe) {
       const map = new Map();
-      for (const f of friends()) {
+      for (const f of [...friends(), ...this.extra]) {
         for (const off of [-1, 0, 1]) map.set(await topicFor(f, off), f);
       }
       this.topics = map;
@@ -330,6 +363,16 @@ const Rendezvous = (() => {
       return sent;
     }
 
+    async addChannel(channel) {
+      this.extra = [...this.extra.filter((c) => c.id !== channel.id), channel];
+      await this.refreshTopics(true);
+    }
+
+    async removeChannel(channel) {
+      this.extra = this.extra.filter((c) => c.id !== channel.id);
+      await this.refreshTopics(true);
+    }
+
     close() {
       this.closed = true;
       clearInterval(this.topicTimer);
@@ -342,6 +385,7 @@ const Rendezvous = (() => {
 
   return {
     DEFAULT_RELAYS, identity, pair, friends, touchFriend, removeFriend, Pool,
+    newLobbyCode, normalizeLobbyCode, lobbyChannel,
     // exposed for tests
     _test: { schnorrSign, mulG, toHex, fromHex, bytesToBig },
   };

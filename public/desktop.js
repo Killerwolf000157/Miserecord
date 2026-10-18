@@ -92,7 +92,7 @@
   $('#sUpdateCheck').onclick = () => desk.checkForUpdates();
   $('#updateRestart').onclick = () => {
     // Don't cut off a call: ask first if one is running.
-    if (state.pc && !confirm('Restarting ends your current call. Restart now?')) return;
+    if (isConnected() && !confirm('Restarting ends your current call. Restart now?')) return;
     desk.installUpdate();
   };
 

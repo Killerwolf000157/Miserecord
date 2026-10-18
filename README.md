@@ -1,11 +1,12 @@
 # Miserecord
 
-Private one-to-one calls in the browser, with nothing to install and no server to run:
+Private calls with your friends, 1:1 or in groups of up to 8, with no server to run:
 
 - **Voice call** with mute and speaking indicators
 - **Screen sharing**, including tab or system audio where the browser supports it
 - **Media file streaming**: play a local video or song live to your friend
 - **Chat and file transfer** of any size, with image previews
+- **Group lobbies**: create a lobby, share its one code, and anyone with it can join (up to 8 people)
 - **Saved friends**: swap codes once, then just press **Call**
 - **Settings** (gear icon): microphone and speaker, echo cancellation and noise suppression,
   voice quality up to Hi-Fi stereo, streamed audio up to 510 kbps, screen-share resolution
@@ -40,6 +41,15 @@ The desktop app adds:
 
 Open `public/index.html` in Chrome or Edge. Everything works except the desktop extras.
 
+### Group calls: lobbies
+
+1. Click **Create a lobby**. You get a code like `7KQ4-XM2P-9DTA-H3VW`.
+2. Share it however you like. Others type it under **Group call** and click **Join**.
+3. As the lobby's creator you can **lock** it (the lock in the top bar) so nobody new can join,
+   and **remove** someone (the × on their picture).
+
+The code is the key: anyone who has it can join, so share it only with people you want in the call.
+
 ### First call with someone new: swap two codes
 
 1. Enter your name and click **Start a call**. Send your friend the code shown, over any chat app.
@@ -54,6 +64,15 @@ Your friend shows up under **Friends**. Press **Call**. Your friend gets an inco
 screen if they have Miserecord open, and can answer or decline.
 
 ## How it works
+
+**Groups.** Everyone in a lobby connects directly to everyone else (a "mesh"), so there is still
+no server. Each person uploads their voice and streams once per other person, which is why
+lobbies stop at 8 and why streaming in 4K to several people needs plenty of upload.
+
+**Lobby codes.** The 16-character code (80 random bits) is turned into the lobby's relay topic
+and its encryption key, so relays only ever see encrypted messages, and only people with the
+code can read them or find the lobby.
+
 
 **First connection.** The codes carry each side's WebRTC connection info. Once the direct
 connection is up, all further setup (such as starting a screen share) goes over it.
