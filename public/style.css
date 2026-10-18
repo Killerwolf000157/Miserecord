@@ -874,11 +874,11 @@ select.native-select { display: none !important; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 /* ---------- streams slide in and out ---------- */
-.tile { animation: tile-in .42s cubic-bezier(.2, .8, .2, 1); }
-.tile.leaving { animation: tile-out .32s cubic-bezier(.4, 0, .7, .2) forwards; pointer-events: none; }
-@keyframes tile-in { from { opacity: 0; transform: translateY(28px) scale(.97); } }
-@keyframes tile-out { to { opacity: 0; transform: translateY(20px) scale(.97); } }
+.tile { animation: tile-in .22s cubic-bezier(.2, .8, .2, 1); }
+.tile.leaving { animation: tile-out .15s cubic-bezier(.4, 0, 1, 1) forwards; pointer-events: none; }
+@keyframes tile-in { from { opacity: 0; transform: translateY(16px) scale(.98); } }
+@keyframes tile-out { to { opacity: 0; transform: translateY(10px) scale(.98); } }
 /* the people shrink to the top row smoothly as the stage changes */
-.avatar-wrap { transition: width .42s cubic-bezier(.2, .8, .2, 1), height .42s cubic-bezier(.2, .8, .2, 1); }
-.avatar { transition: font-size .42s cubic-bezier(.2, .8, .2, 1); }
-.pname { transition: font-size .42s cubic-bezier(.2, .8, .2, 1); }
+.avatar-wrap { transition: width .24s cubic-bezier(.2, .8, .2, 1), height .24s cubic-bezier(.2, .8, .2, 1); }
+.avatar { transition: font-size .24s cubic-bezier(.2, .8, .2, 1); }
+.pname { transition: font-size .24s cubic-bezier(.2, .8, .2, 1); }

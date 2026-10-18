@@ -68,6 +68,8 @@
     $('#picker').hidden = true;
     const audio = $('#pickerAudio').checked && !$('#pickerAudioRow').hidden;
     Log.info('media', share && selected ? 'screen picked' : 'screen picker cancelled', share && selected ? { kind, audio } : undefined);
+    // Cancelling makes the page see a generic abort; mark it so no error shows.
+    if (!(share && selected)) state.pickerCancelled = true;
     desk.pickSource(req.id, share ? selected : null, audio);
   }
 

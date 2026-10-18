@@ -50,8 +50,11 @@ let quitting = false;
 // single-instance lock, so it runs next to the installed app instead of just
 // bringing that one to the front, and the two never share friends or settings.
 if (!app.isPackaged) {
-  app.setName('Miserecord Dev');
-  app.setPath('userData', path.join(app.getPath('appData'), 'Miserecord Dev'));
+  // MISERECORD_PROFILE gives test runs their own data again, so they can run
+  // while the dev window is open.
+  const profile = process.env.MISERECORD_PROFILE ? `Miserecord ${process.env.MISERECORD_PROFILE}` : 'Miserecord Dev';
+  app.setName(profile);
+  app.setPath('userData', path.join(app.getPath('appData'), profile));
 }
 
 // One window only: opening the app again brings back the running one.
@@ -297,13 +300,14 @@ function setupScreenPicker(ses) {
       mainWindow.webContents.send('pick-source', { id, sources: list, canShareAudio: process.platform === 'win32' });
       ipcMain.once(`source-picked-${id}`, (_e, choice) => {
         const source = choice && sources.find((s) => s.id === choice.sourceId);
-        if (!source) return callback({});
+        // No arguments means cancelled; an empty object throws in recent Electron.
+        if (!source) return callback();
         // On Windows, "loopback" captures everything you hear: games, music, videos.
         callback(choice.audio && process.platform === 'win32' ? { video: source, audio: 'loopback' } : { video: source });
       });
     } catch (err) {
       console.error('screen picker failed', err);
-      callback({});
+      try { callback(); } catch { /* already answered */ }
     }
   });
 }

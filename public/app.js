@@ -1452,10 +1452,14 @@ function toggleMute() {
 async function toggleScreen() {
   if (state.screen) return stopLocal('screen');
   let stream;
+  state.pickerCancelled = false;
   try {
     stream = await navigator.mediaDevices.getDisplayMedia(shareConstraints());
   } catch (err) {
-    if (err.name !== 'NotAllowedError') toast(`Couldn't share screen: ${err.message}`, 'err');
+    // Closing the picker is not an error.
+    const cancelled = err.name === 'NotAllowedError' || state.pickerCancelled;
+    Log.info('media', cancelled ? 'screen share cancelled' : 'screen share failed', `${err.name}: ${err.message}`);
+    if (!cancelled) toast(`Couldn't share screen: ${err.message}`, 'err');
     return;
   }
   const video = stream.getVideoTracks()[0];
@@ -1761,7 +1765,7 @@ function removeTile(el) {
   };
   if (reducedMotion()) return done();
   el.addEventListener('animationend', done, { once: true });
-  setTimeout(done, 450); // in case the animation doesn't run
+  setTimeout(done, 250); // in case the animation doesn't run
 }
 
 // When the first stream appears (or the last one goes), the people glide
@@ -1779,7 +1783,7 @@ function updateStageLayout() {
   if (Math.abs(dy) < 1) return;
   people.animate(
     [{ transform: `translateY(${dy}px)` }, { transform: 'none' }],
-    { duration: 460, easing: 'cubic-bezier(.2, .8, .2, 1)' },
+    { duration: 240, easing: 'cubic-bezier(.2, .8, .2, 1)' },
   );
 }
 
