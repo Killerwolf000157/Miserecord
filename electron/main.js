@@ -158,6 +158,17 @@ function createWindow() {
     },
   });
   mainWindow.removeMenu();
+  // Tell the taskbar exactly which icon goes with this window and app ID, so
+  // Windows doesn't fall back to an icon it cached for the ID earlier.
+  if (process.platform === 'win32' && app.isPackaged) {
+    mainWindow.setAppDetails({
+      appId: 'com.killerwolf000157.miserecord',
+      appIconPath: process.execPath,
+      appIconIndex: 0,
+      relaunchCommand: `"${process.execPath}"`,
+      relaunchDisplayName: 'Miserecord',
+    });
+  }
   mainWindow.once('ready-to-show', () => { if (!START_HIDDEN) mainWindow.show(); });
   mainWindow.loadURL(`${APP_ORIGIN}/`);
 
