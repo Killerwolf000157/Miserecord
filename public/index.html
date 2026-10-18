@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Miserecord</title>
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237AA2FF'/%3E%3Cstop offset='.35' stop-color='%23B28BFF'/%3E%3Cstop offset='.65' stop-color='%23FF8CC6'/%3E%3Cstop offset='1' stop-color='%23FFB77A'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='16' cy='16' r='14' fill='url(%23g)'/%3E%3C/svg%3E">
+  <script>
+    // Apply a saved theme before first paint so there's no flash.
+    try { const t = localStorage.getItem('miserecord.theme'); if (t) document.documentElement.dataset.theme = t; } catch {}
+  </script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ============================== Join ============================== -->
+<section id="join" class="screen center">
+  <button type="button" class="icon-btn settings-btn corner" title="Settings" aria-label="Settings">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+  </button>
+
+  <div class="panel">
+    <div class="hero">
+      <div class="orb big" aria-hidden="true"></div>
+      <h1>Miserecord</h1>
+      <p class="lede">Voice, screens and files, straight to your friend.</p>
+    </div>
+
+    <div id="insecure" class="notice" hidden>
+      This browser blocks the microphone and screen sharing here. Open <strong>index.html</strong> directly from its folder.
+    </div>
+
+    <form id="joinForm" autocomplete="off">
+      <div class="group">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input id="name" maxlength="32" required placeholder="Your name">
+        </label>
+      </div>
+
+      <section id="friendsSection" class="friends" hidden>
+        <div class="section-head">
+          <h2>Friends</h2>
+          <div id="relayStatus" class="status wait"><span class="dot"></span><span id="relayText">Getting ready for calls</span></div>
+        </div>
+        <div class="group" id="friendList"></div>
+      </section>
+
+      <section class="add-friend">
+        <h2 id="addTitle" hidden>Add a friend</h2>
+        <div class="btn-row" id="manualBtns">
+          <button class="btn primary big" type="button" id="startBtn">Start a call</button>
+          <button class="btn big" type="button" id="answerBtn">Join with a code</button>
+        </div>
+        <p class="hint center-hint" id="codesHint">You'll swap two codes with your friend over any chat app. After that first call they're saved here, so next time you just press Call.</p>
+      </section>
+
+    </form>
+    <p id="joinError" class="error" hidden></p>
+  </div>
+</section>
+
+<!-- ======================= No-server code exchange ======================= -->
+<section id="connect" class="screen center" hidden>
+  <div class="panel">
+    <div class="hero compact">
+      <div class="orb mid" aria-hidden="true"></div>
+      <h1 id="connectTitle">Start a call</h1>
+      <p class="lede">Swap two codes with your friend over any chat app.</p>
+    </div>
+
+    <div id="manual" class="steps">
+      <div class="step" id="mMine">
+        <h2 id="mMineTitle"></h2>
+        <textarea id="myCode" rows="4" readonly spellcheck="false" placeholder="Preparing your code…"></textarea>
+        <button type="button" class="btn" id="copyCode" disabled>Copy code</button>
+      </div>
+      <div class="step" id="mTheirs">
+        <h2 id="mTheirsTitle"></h2>
+        <textarea id="theirCode" rows="4" spellcheck="false" placeholder="Paste the code here"></textarea>
+        <button type="button" class="btn primary" id="useCode">Connect</button>
+      </div>
+    </div>
+
+    <div class="connect-foot">
+      <div id="connectPill" class="status wait" role="status" aria-live="polite">
+        <span class="dot"></span><span id="connectStatus"></span>
+      </div>
+      <button type="button" class="link-btn" id="cancelConnect">Cancel</button>
+    </div>
+    <button type="button" class="link-btn details-toggle" data-details="connectLog">Show details</button>
+    <pre class="live-log" id="connectLog" hidden></pre>
+  </div>
+</section>
+
+<!-- ======================= Calling a saved friend ======================= -->
+<section id="ringing" class="screen center" hidden>
+  <div class="panel">
+    <div class="hero compact">
+      <div class="orb big pulse" aria-hidden="true"></div>
+      <h1 id="ringTitle"></h1>
+      <p class="lede" id="ringSub"></p>
+    </div>
+    <div class="connect-foot">
+      <div id="ringPill" class="status wait" role="status" aria-live="polite">
+        <span class="dot"></span><span id="ringStatus"></span>
+      </div>
+      <button type="button" class="btn" id="cancelRing">Cancel</button>
+    </div>
+    <button type="button" class="link-btn details-toggle" data-details="ringLog">Show details</button>
+    <pre class="live-log" id="ringLog" hidden></pre>
+  </div>
+</section>
+
+<!-- ============================== Call ============================== -->
+<section id="call" class="screen call" hidden>
+  <header class="topbar">
+    <div class="brand-mini">
+      <div class="orb tiny" aria-hidden="true"></div>
+      <span>Miserecord</span>
+    </div>
+    <div class="top-right">
+      <div id="status" class="status wait" role="status" aria-live="polite">
+        <span class="dot"></span><span id="statusText">Connecting…</span><span id="statusDetail" class="detail"></span>
+      </div>
+      <button type="button" class="icon-btn settings-btn" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="layout" id="layout">
+    <div class="stage-wrap">
+      <div class="stage">
+        <div class="hub" id="hub">
+        <div class="glow" aria-hidden="true"></div>
+        <div class="people">
+          <div class="person" id="meCard">
+            <div class="avatar-wrap">
+              <div class="aura" aria-hidden="true"></div>
+              <div class="avatar">
+                <span class="initial"></span>
+                <span class="micoff" hidden title="Muted">
+                  <svg viewBox="0 0 24 24"><path d="M4 4l16 16M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 10.7 5M12 17.5V20"/></svg>
+                </span>
+              </div>
+            </div>
+            <div class="pname"><span class="label"></span><span class="you">You</span></div>
+          </div>
+          <div class="link" aria-hidden="true"><span></span></div>
+          <div class="person waiting" id="peerCard">
+            <div class="avatar-wrap">
+              <div class="aura" aria-hidden="true"></div>
+              <div class="avatar">
+                <span class="initial"></span>
+                <span class="micoff" hidden title="Muted">
+                  <svg viewBox="0 0 24 24"><path d="M4 4l16 16M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 10.7 5M12 17.5V20"/></svg>
+                </span>
+              </div>
+            </div>
+            <div class="pname"><span class="label">Waiting for your friend</span></div>
+          </div>
+        </div>
+        <div class="call-meta"><span id="callTimer" class="timer"></span></div>
+        <div class="quick" id="quick" hidden>
+          <button type="button" class="btn pill" data-quick="screenBtn">
+            <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="2.5"/><path d="M8.5 20h7M12 13V8M9.5 10.5L12 8l2.5 2.5"/></svg>
+            Share your screen
+          </button>
+          <button type="button" class="btn pill" data-quick="mediaBtn">
+            <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.2 9.4v5.2l4.4-2.6z"/></svg>
+            Stream a video or song
+          </button>
+        </div>
+        </div>
+        <div id="tiles" class="tiles"></div>
+      </div>
+
+      <button type="button" id="exitFocus" class="exit-fs">
+        <svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>
+        Exit full screen
+      </button>
+
+      <nav class="dock" aria-label="Call controls">
+        <button id="micBtn" class="ctl" title="Mute">
+          <svg class="on" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V20"/></svg>
+          <svg class="off" viewBox="0 0 24 24"><path d="M4 4l16 16M9 9v3a3 3 0 0 0 5.1 2.1M15 9.3V6a3 3 0 0 0-5.7-1.3M18.5 11a6.5 6.5 0 0 1-1 3.5M5.5 11a6.5 6.5 0 0 0 10.7 5M12 17.5V20"/></svg>
+          <span class="sr">Mute</span>
+        </button>
+        <button id="screenBtn" class="ctl" title="Share screen">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="2.5"/><path d="M8.5 20h7M12 13V8M9.5 10.5L12 8l2.5 2.5"/></svg>
+          <span class="sr">Share screen</span>
+        </button>
+        <button id="mediaBtn" class="ctl" title="Stream a file">
+          <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M10.2 9.4v5.2l4.4-2.6z"/></svg>
+          <span class="sr">Stream file</span>
+        </button>
+        <button id="chatBtn" class="ctl" title="Chat" aria-pressed="false">
+          <svg viewBox="0 0 24 24"><path d="M20 11.5c0 4-3.6 7-8 7-1 0-2-.1-2.9-.4L5 19.5l1-3.4C4.8 14.9 4 13.3 4 11.5c0-4 3.6-7 8-7s8 3 8 7z"/></svg>
+          <span class="badge" id="chatBadge" hidden></span>
+          <span class="sr">Chat</span>
+        </button>
+        <span class="dock-sep" aria-hidden="true"></span>
+        <button id="hangBtn" class="ctl danger" title="Leave">
+          <svg viewBox="0 0 24 24"><path d="M3 14.8c5-4.6 13-4.6 18 0l-2.2 2.4-3.3-1.4v-2.5a11 11 0 0 0-7 0v2.5l-3.3 1.4z"/></svg>
+          <span class="sr">Leave</span>
+        </button>
+      </nav>
+    </div>
+
+    <aside class="side" id="side" aria-label="Chat">
+      <div class="side-head">
+        <h2>Chat</h2>
+        <button type="button" class="icon-btn" id="closeChat" title="Hide chat" aria-label="Hide chat">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <div id="messages" class="messages">
+        <p class="empty">Messages and files go straight to your friend and aren't saved anywhere. Drop files here to send them.</p>
+      </div>
+      <form id="chatForm" class="composer">
+        <button type="button" id="attachBtn" class="icon-btn" title="Send files" aria-label="Send files" disabled>
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <input id="chatInput" placeholder="Waiting for your friend" autocomplete="off" maxlength="4000" disabled>
+        <button id="sendBtn" class="send-btn" title="Send" aria-label="Send" disabled>
+          <svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>
+        </button>
+      </form>
+    </aside>
+  </main>
+
+  <input type="file" id="mediaFile" accept="audio/*,video/*" hidden>
+  <input type="file" id="sendFiles" multiple hidden>
+</section>
+
+<div id="incoming" class="sheet-backdrop" hidden>
+  <div class="sheet" role="alertdialog" aria-labelledby="incomingTitle">
+    <div class="orb mid pulse" aria-hidden="true"></div>
+    <h2 id="incomingTitle"></h2>
+    <p class="hint">Calls go straight between you two.</p>
+    <div class="btn-row">
+      <button type="button" class="btn big decline" id="declineBtn">Decline</button>
+      <button type="button" class="btn primary big" id="acceptBtn">Answer</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== Settings ============================== -->
+<div id="settings" class="sheet-backdrop" hidden>
+  <div class="settings" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <header class="settings-head">
+      <h2 id="settingsTitle">Settings</h2>
+      <button type="button" class="icon-btn" id="closeSettings" title="Close" aria-label="Close settings">
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div class="seg tabs" id="settingsTabs" role="tablist">
+      <button type="button" role="tab" data-tab="general" class="active">General</button>
+      <button type="button" role="tab" data-tab="audio">Audio</button>
+      <button type="button" role="tab" data-tab="video">Video</button>
+      <button type="button" role="tab" data-tab="network">Network</button>
+    </div>
+
+    <div class="settings-body">
+      <!-- General -->
+      <section data-panel="general">
+        <div class="group">
+          <label class="row"><span class="row-label">Name</span>
+            <input id="sName" class="row-input" maxlength="32" placeholder="Your name"></label>
+          <div class="row"><span class="row-label">Appearance</span>
+            <div class="seg mini" id="sTheme">
+              <button type="button" data-value="system">Auto</button>
+              <button type="button" data-value="light">Light</button>
+              <button type="button" data-value="dark">Dark</button>
+            </div>
+          </div>
+        </div>
+        <h3 class="group-title">Saved friends</h3>
+        <div class="group">
+          <div class="row"><span class="row-label" id="sFriendCount"></span>
+            <button type="button" class="btn small danger-text" id="sForget">Remove all</button></div>
+        </div>
+        <p class="group-note">Friends and your key are kept only in this browser. Removing them means swapping codes again.</p>
+
+        <h3 class="group-title">Troubleshooting</h3>
+        <div class="group">
+          <div class="row"><span class="row-label">Connection log</span>
+            <button type="button" class="btn small" id="sLogCopy">Copy</button>
+            <button type="button" class="btn small" id="sLogSave">Download</button>
+            <button type="button" class="btn small" id="sLogClear">Clear</button>
+          </div>
+        </div>
+        <p class="group-note">A record of each connection step in this window. It stays on your computer and leaves out IP addresses. If a call won't connect, copy the log from both windows and share it.</p>
+      </section>
+
+      <!-- Audio -->
+      <section data-panel="audio" hidden>
+        <h3 class="group-title">Microphone</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Input</span><select id="sMic"></select></label>
+          <div class="row"><span class="row-label">Level</span>
+            <div class="meter"><i id="sMicLevel"></i></div>
+            <button type="button" class="btn small" id="sMicTest">Test</button>
+          </div>
+          <label class="row"><span class="row-label">Echo cancellation</span><input type="checkbox" class="switch" id="sEcho"></label>
+          <label class="row"><span class="row-label">Noise suppression</span><input type="checkbox" class="switch" id="sNoise"></label>
+          <label class="row"><span class="row-label">Automatic volume</span><input type="checkbox" class="switch" id="sAgc"></label>
+        </div>
+        <p class="group-note" id="sMicNote"></p>
+
+        <h3 class="group-title">Quality</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Voice</span>
+            <select id="sVoice">
+              <option value="standard">Standard, 32 kbps</option>
+              <option value="high">High, 64 kbps</option>
+              <option value="veryhigh">Very high, 128 kbps</option>
+              <option value="hifi">Hi-Fi stereo, 256 kbps</option>
+            </select></label>
+          <label class="row"><span class="row-label">Shared and streamed audio</span>
+            <select id="sStreamAudio">
+              <option value="128">128 kbps stereo</option>
+              <option value="256">256 kbps stereo</option>
+              <option value="510">510 kbps stereo, best</option>
+            </select></label>
+        </div>
+        <p class="group-note">Hi-Fi turns off echo cancellation and noise suppression so music and voices sound natural. Use headphones with it.</p>
+
+        <h3 class="group-title">Output</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Speaker</span><select id="sSpeaker"></select></label>
+        </div>
+        <p class="group-note" id="sSpeakerNote" hidden>This browser always plays through your system's default speaker. Change it in your computer's sound settings.</p>
+      </section>
+
+      <!-- Video -->
+      <section data-panel="video" hidden>
+        <h3 class="group-title">Screen sharing</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Resolution</span>
+            <select id="sShareRes">
+              <option value="native">Full screen resolution</option>
+              <option value="2160">4K, 2160p</option>
+              <option value="1440">1440p</option>
+              <option value="1080">1080p</option>
+              <option value="720">720p</option>
+            </select></label>
+          <label class="row"><span class="row-label">Frame rate</span>
+            <select id="sShareFps">
+              <option value="30">30 fps</option>
+              <option value="60">60 fps</option>
+            </select></label>
+        </div>
+
+        <h3 class="group-title">Streaming quality</h3>
+        <div class="group">
+          <label class="row"><span class="row-label">Bitrate</span>
+            <select id="sQuality">
+              <option value="auto">Browser default, about 2.5 Mbps</option>
+              <option value="high">High, up to 8 Mbps</option>
+              <option value="veryhigh">Very high, up to 20 Mbps</option>
+              <option value="max">Max, up to 50 Mbps</option>
+            </select></label>
+          <label class="row"><span class="row-label">When the connection is busy</span>
+            <select id="sMotion">
+              <option value="auto">Decide for me</option>
+              <option value="sharp">Keep it sharp</option>
+              <option value="smooth">Keep it smooth</option>
+            </select></label>
+          <label class="row"><span class="row-label">Codec</span><select id="sCodec"></select></label>
+        </div>
+        <p class="group-note">Higher bitrates need more upload speed: 4K at 60 fps looks best at 25 to 50 Mbps. "Decide for me" keeps screen shares sharp and videos smooth. Changing the codec also changes it for your friend.</p>
+
+        <h3 class="group-title">Right now</h3>
+        <div class="group" id="sStats">
+          <div class="row"><span class="row-label">Sending</span><span class="row-value" id="sStatsOut">Not in a call</span></div>
+          <div class="row"><span class="row-label">Receiving</span><span class="row-value" id="sStatsIn">Not in a call</span></div>
+        </div>
+      </section>
+
+      <!-- Network -->
+      <section data-panel="network" hidden>
+        <h3 class="group-title">STUN servers</h3>
+        <textarea id="stun" rows="3" spellcheck="false" aria-label="STUN servers, one per line"></textarea>
+        <p class="group-note">One per line. STUN only tells your browser its public address so you and your friend can find each other.
+          Your audio, video and files never pass through it. Clear the box to stay on your local network with no outside servers.</p>
+
+        <h3 class="group-title">Relays for calling saved friends</h3>
+        <textarea id="relays" rows="4" spellcheck="false" aria-label="Relays, one per line"></textarea>
+        <p class="group-note">One per line. Relays only pass encrypted "I'm calling" messages and connection info between you and a saved friend.
+          They can't read them and don't store them, but they can see your IP address.</p>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+
+<script src="log.js"></script>
+<script src="rendezvous.js"></script>
+<script src="settings.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
