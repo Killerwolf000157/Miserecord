@@ -23,6 +23,18 @@ contextBridge.exposeInMainWorld('miserecordDesktop', {
   // The page tells us when a screen share stops: captures see the app again.
   shareEnded: () => ipcRenderer.send('share-ended'),
   setStreaming: (on) => ipcRenderer.send('streaming', !!on), // while you share or stream a file
+
+  // Native streaming engine: capture and hardware encoding in miserecord-capture.
+  engineProbe: () => ipcRenderer.invoke('engine-probe'),
+  engineStart: (opts) => ipcRenderer.invoke('engine-start', opts),
+  engineControl: (line) => ipcRenderer.send('engine-control', String(line)),
+  engineStop: () => ipcRenderer.send('engine-stop'),
+  onEngineFrame(callback) {
+    ipcRenderer.on('engine-frame', (_e, frame) => callback(frame));
+  },
+  onEngineEvent(callback) {
+    ipcRenderer.on('engine-event', (_e, ev) => callback(ev));
+  },
   systemInfo: () => ipcRenderer.invoke('system-info'),
   pickSource(requestId, sourceId, audio) {
     ipcRenderer.send(`source-picked-${Number(requestId)}`, sourceId ? { sourceId: String(sourceId), audio: !!audio } : null);

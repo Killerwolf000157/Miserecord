@@ -259,6 +259,7 @@ async function refreshStreamInfo() {
       // WebRTC only measures the upload as high as what it sends, so the number means
       // something only when the line is what holds the stream back.
       if (send.upload != null && send.diagnosis === 'bandwidth') lines.push(`<b>${I18n.t('Upload')}</b> ${I18n.t('about {0} Mbps', send.upload)}`);
+      if (send.engine) lines.push(`<b>${I18n.t('Native engine')}</b> ${send.engine}`);
       if (send.auto) lines.push(`<b>${I18n.t('Auto quality')}</b> ${send.level}`);
       lines.push(`<span class="si-${send.diagnosis}">${I18n.t(DIAGNOSIS[send.diagnosis] || '')}</span>`);
     } else {
@@ -284,6 +285,7 @@ function onStreamStats(peer, msg) {
     gpu: s.gpu === true, auto: s.auto === true,
     level: /^\d{3,4}p \d{2} fps$/.test(s.level) ? s.level : '',
     diagnosis: DIAGNOSIS[s.diagnosis] ? s.diagnosis : 'ok',
+    engine: typeof s.engine === 'string' ? s.engine.replace(/[<>&"]/g, '').slice(0, 120) : '',
   };
 }
 

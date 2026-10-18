@@ -28,6 +28,7 @@ const SETTINGS_DEFAULTS = {
   language: 'auto',     // auto follows Windows; en | fr
   micGain: 100,         // your microphone volume for everyone, 0-200%
   adaptive: true,       // smart streaming: start where this computer can, step down when it struggles
+  engine: true,         // native capture + hardware encoder for screen shares, when everyone can show it
 };
 
 // Earlier versions saved their (lower) defaults with every settings change.
@@ -474,6 +475,7 @@ function initSettings() {
   bindSelect('#sMotion', 'motion');
   bindSelect('#sCodec', 'codec');
   bindSwitch('#sAdaptive', 'adaptive');
+  bindSwitch('#sEngine', 'engine');
   const codecs = supportedVideoCodecs();
   $('#sCodec').innerHTML = '';
   $('#sCodec').append(new Option('Automatic', 'auto'));
@@ -535,6 +537,8 @@ function openSettings() {
   $('#sMotion').value = settings.motion;
   $('#sCodec').value = settings.codec;
   $('#sAdaptive').checked = settings.adaptive;
+  $('#sEngine').checked = settings.engine;
+  $('#sEngine').closest('.row').hidden = !(Native.caps && (Native.caps.codecs || []).length);
   syncSpecs();
   syncExtras();
   const canPickSpeaker = typeof HTMLMediaElement.prototype.setSinkId === 'function';

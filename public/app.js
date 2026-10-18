@@ -729,6 +729,8 @@ function createPeer(id, { name, polite, waitForOffer = false, sendPre }) {
 
   // Both sides create the same pre-agreed channel; no extra handshake needed.
   setupDataChannel(peer, pc.createDataChannel('main', { negotiated: true, id: 0, ordered: true }));
+  // The native streaming engine's video channel (public/engine.js).
+  peer.engineDc = Engine.channel(pc);
 
   if (state.mic) for (const t of state.mic.getTracks()) pc.addTrack(t, state.mic);
   for (const kind of ['screen', 'media']) {
@@ -974,6 +976,8 @@ function removePeer(peer, reason) {
   for (const id of [...peer.remote.keys()]) removeRemoteStream(peer, id);
   if (peer.incoming) peer.incoming.card.fail('Transfer interrupted');
   for (const kind of ['screen', 'media']) if (state[kind]) state[kind].senders.delete(peer.id);
+  if (peer.engineRx) peer.engineRx.stop();
+  Native.removeViewer(peer);
   detachMeter(peer.card);
   peer.card.remove();
   if (!state.peers.size) {
@@ -1159,6 +1163,8 @@ function setupDataChannel(peer, dc) {
     if (state.lobby) clearTimeout(state.lobby.timeout);
     showScreen('call');
     sendTo(peer, { type: 'hello', name: state.name, muted: state.muted });
+    // What we can decode for a native share (public/native.js).
+    sendTo(peer, { type: 'engine-hello', codecs: state.engineDecode || [] });
     // 1:1 calls swap identity keys over this direct, encrypted channel so you
     // can find each other again later without codes. In lobbies everyone shares
     // their public key so the app can tell who's already a friend; saving someone
@@ -1214,6 +1220,7 @@ function onPeerGone(peer, reason) {
 }
 
 function onDataMessage(peer, msg) {
+  if (typeof msg.type === 'string' && msg.type.startsWith('engine-')) return onEngineMessage(peer, msg);
   switch (msg.type) {
     case 'ident':
       if (msg.pub && msg.pub.kty === 'EC') {
@@ -1587,16 +1594,27 @@ async function toggleScreen() {
   });
   if (video) {
     if ('contentHint' in video) video.contentHint = motionFor('screen') === 'sharp' ? 'detail' : 'motion';
-    video.addEventListener('ended', () => { if (state.screen && state.screen.stream === stream) stopLocal('screen'); });
+    video.addEventListener('ended', () => { if (state.screen && state.screen.preview === stream) stopLocal('screen'); });
   }
-  state.screen = { stream, senders: new Map(), label: 'Screen' };
+  // The native engine sends the picture itself when everyone can show it: then
+  // only the sound goes over WebRTC, and the browser's capture is just a small
+  // preview for your own tile.
+  let publishStream = stream;
+  let native = false;
+  if (video && Native.pickCodec()) {
+    publishStream = new MediaStream(stream.getAudioTracks());
+    native = await Native.start(publishStream.id);
+    if (!native) publishStream = stream;
+  }
+  if (native) video.applyConstraints({ width: { max: 640 }, height: { max: 360 }, frameRate: { max: 10 } }).catch(() => {});
+  state.screen = { stream: publishStream, preview: stream, native, senders: new Map(), label: 'Screen' };
   const tile = makeTile({ title: 'Your screen', remote: false });
   tile.video.muted = true;
   tile.video.srcObject = stream;
   state.screen.tile = tile.el;
   addQualityPicker(tile.el);
   publish('screen');
-  if (video) Adapt.start(video);
+  if (video && !native) Adapt.start(video);
   streaming();
   // Right-click your own share for its numbers.
   tile.el.addEventListener('contextmenu', (e) => {
@@ -1697,7 +1715,9 @@ function stopLocal(kind, quiet = false) {
     }
   }
   broadcast({ type: 'stream-end', id: s.stream.id });
+  if (s.native) Native.stop();
   s.stream.getTracks().forEach((t) => t.stop());
+  if (s.preview) s.preview.getTracks().forEach((t) => t.stop());
   if (s.el) { s.el.pause(); s.el.removeAttribute('src'); s.el.load(); }
   if (s.url) URL.revokeObjectURL(s.url);
   if (s.tile) {
@@ -2121,3 +2141,4 @@ initLobby();
 initChat();
 initControls();
 initSoundPanel();
+Native.init();

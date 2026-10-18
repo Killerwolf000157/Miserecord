@@ -8,7 +8,7 @@ use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
-use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, MonitorFromPoint, HDC, HMONITOR, MONITOR_DEFAULTTOPRIMARY};
+use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, MonitorFromPoint, HDC, HMONITOR, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY};
 use windows::Win32::System::WinRT::Direct3D11::{CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess};
 use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemInterop;
 
@@ -17,6 +17,7 @@ use crate::gpu::Gpu;
 pub enum Target {
     Primary,
     Monitor(usize),
+    Point(i32, i32), // the monitor showing this point (physical pixels)
     Window(isize),
 }
 
@@ -24,6 +25,7 @@ pub enum Target {
 pub fn monitor_of(target: &Target) -> Option<HMONITOR> {
     match target {
         Target::Primary => Some(unsafe { MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY) }),
+        Target::Point(x, y) => Some(unsafe { MonitorFromPoint(POINT { x: *x, y: *y }, MONITOR_DEFAULTTONEAREST) }),
         Target::Monitor(i) => {
             let list = monitors();
             list.get(*i).or(list.first()).copied()

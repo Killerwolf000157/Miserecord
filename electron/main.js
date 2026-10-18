@@ -19,6 +19,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { pathToFileURL } = require('url');
+const engine = require('./engine-host');
 
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 // Windows picks the right size (16–256 px) from the .ico for taskbar, title bar and tray.
@@ -171,7 +172,12 @@ function start() {
     return true;
   });
   // The page tells us its light or dark theme so the window buttons match.
-  ipcMain.on('share-ended', endScreenShare);
+  ipcMain.on('share-ended', () => { endScreenShare(); engine.stop(); });
+  ipcMain.handle('engine-probe', () => engine.probe());
+  ipcMain.handle('engine-start', (e, opts) => engine.start(e.sender, opts || {}));
+  ipcMain.on('engine-control', (_e, line) => engine.control(line));
+  ipcMain.on('engine-stop', () => engine.stop());
+  app.on('will-quit', () => engine.stop());
   ipcMain.on('streaming', (_e, on) => setStreamingPriority(!!on));
   ipcMain.handle('system-info', systemInfo);
   ipcMain.on('set-language', (_e, lang) => {
@@ -247,8 +253,8 @@ function createWindow() {
   mainWindow.on('closed', () => { mainWindow = null; endScreenShare(); });
   // Closed to the tray with an update waiting: install it now, quietly.
   mainWindow.on('hide', () => setTimeout(() => installWhenIdle(), 1000));
-  // A reload drops any share, so the capture hiding goes with it.
-  mainWindow.webContents.on('did-start-loading', endScreenShare);
+  // A reload drops any share, so the capture hiding and the native engine go with it.
+  mainWindow.webContents.on('did-start-loading', () => { endScreenShare(); engine.stop(); });
 
   // Links open in the real browser; the app never navigates away from itself.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
@@ -355,6 +361,7 @@ function setupScreenPicker(ses) {
       // No arguments means cancelled; an empty object throws in recent Electron.
       if (!source) return callback();
       const video = { id: source.id, name: source.name };
+      engine.setPick(source); // the native engine captures the same screen or window
       if (source.id.startsWith('screen:')) startScreenShare();
       // On Windows, "loopback" captures everything you hear: games, music, videos.
       // The page asks for restrictOwnAudio, which leaves Miserecord's own sound out.

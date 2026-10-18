@@ -2,7 +2,7 @@
 //
 //   miserecord-capture --probe
 //       prints {"adapter": ..., "codecs": ["AV1", "H264"]} and exits
-//   miserecord-capture [--monitor N | --window HWND] [--codec auto|av1|h264]
+//   miserecord-capture [--monitor N|primary | --point X,Y | --window HWND] [--codec auto|av1|h264]
 //                      [--width 2560] [--height 1440] [--fps 60] [--bitrate 8000000]
 //                      [--seconds N] [--out FILE]
 //       streams encoded frames to stdout (or FILE), each as a 20-byte header
@@ -69,6 +69,11 @@ fn parse() -> Args {
                 a.target = if s == "primary" { capture::Target::Primary } else { capture::Target::Monitor(s.parse().unwrap_or(0)) }
             }
             "--window" => a.target = capture::Target::Window(v().parse().unwrap_or(0)),
+            "--point" => {
+                let s = v();
+                let mut p = s.split(',').map(|n| n.trim().parse::<i32>().unwrap_or(0));
+                a.target = capture::Target::Point(p.next().unwrap_or(0), p.next().unwrap_or(0));
+            }
             "--codec" => {
                 a.codec = match v().to_lowercase().as_str() {
                     "av1" => Some(Codec::Av1),
