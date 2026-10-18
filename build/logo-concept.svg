@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>Miserecord logo concept: white circle with a rainbow wave</title>
+  <defs>
+    <!-- The app's aurora colors, left to right along the wave -->
+    <linearGradient id="aurora" gradientUnits="userSpaceOnUse" x1="138" y1="0" x2="374" y2="0">
+      <stop offset="0" stop-color="#7AA2FF"/>
+      <stop offset="0.3" stop-color="#B28BFF"/>
+      <stop offset="0.58" stop-color="#FF8CC6"/>
+      <stop offset="0.82" stop-color="#FFB77A"/>
+      <stop offset="1" stop-color="#8EE3C8"/>
+    </linearGradient>
+    <!-- A barely-there shade so the white circle reads as a sphere, not a sticker -->
+    <radialGradient id="face" cx="0.38" cy="0.3" r="0.82">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E9EAF0"/>
+    </radialGradient>
+    <!-- Soft shadow so the circle still stands out on light backgrounds -->
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#000" flood-opacity=".16"/>
+    </filter>
+  </defs>
+  <circle cx="256" cy="252" r="222" fill="url(#face)" filter="url(#lift)"/>
+  <circle cx="256" cy="252" r="221.5" fill="none" stroke="#000" stroke-opacity=".08"/>
+  <!-- The wave: one thick, round-capped stroke in the lower middle -->
+  <path d="M144 338 C 178 296, 226 300, 258 326 S 332 374, 370 330"
+        fill="none" stroke="url(#aurora)" stroke-width="44" stroke-linecap="round"/>
+</svg>

@@ -105,23 +105,21 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 h1, h2 { font-family: var(--font-display); margin: 0; }
 
-/* ---------- the aurora orb (brand mark) ---------- */
+/* ---------- the logo (white circle, rainbow wave) ---------- */
 .orb {
   position: relative;
   width: 28px; height: 28px; border-radius: 50%;
-  background: conic-gradient(from var(--spin), var(--aurora-stops));
-  animation: spin 14s linear infinite;
-}
-.orb::after {
-  content: ""; position: absolute; inset: 0; border-radius: 50%;
-  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, .9), rgba(255, 255, 255, .25) 38%, rgba(255, 255, 255, 0) 62%);
+  background: url(logo.svg) center / contain no-repeat;
 }
 .orb.tiny { width: 22px; height: 22px; }
 .orb.mid { width: 48px; height: 48px; }
 .orb.big { width: 76px; height: 76px; }
+/* a soft, slowly turning aurora glow behind the larger logos */
 .orb.big::before, .orb.mid::before {
-  content: ""; position: absolute; inset: -18%; border-radius: 50%; z-index: -1;
-  background: inherit; filter: blur(22px); opacity: .55;
+  content: ""; position: absolute; inset: -14%; border-radius: 50%; z-index: -1;
+  background: conic-gradient(from var(--spin), var(--aurora-stops));
+  filter: blur(24px); opacity: .45;
+  animation: spin 14s linear infinite;
 }
 @keyframes spin { to { --spin: 360deg; } }
 
@@ -561,7 +559,7 @@ textarea:focus { box-shadow: 0 0 0 2px var(--focus); }
 .btn.call-btn svg { width: 16px; height: 16px; }
 
 /* ---------- ringing & incoming call ---------- */
-.orb.pulse { animation: spin 14s linear infinite, ring 1.8s ease-in-out infinite; }
+.orb.pulse { animation: ring 1.8s ease-in-out infinite; }
 @keyframes ring { 50% { transform: scale(1.08); } }
 .sheet-backdrop {
   position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 20px;
