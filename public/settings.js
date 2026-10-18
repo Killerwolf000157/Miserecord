@@ -33,9 +33,9 @@ const SETTINGS_DEFAULTS = {
 // Values still equal to those old defaults were never picked by hand, so they
 // move up to the new ones. Anything you chose yourself stays.
 const SETTINGS_VERSION = 5;
-// Version 4 moved everyone's call quality to the best settings once: AI noise
-// suppression, AV1, balanced streaming, 1440p60. Devices, volumes, keys, theme
-// and language are kept.
+// Versions 4 and 5 moved everyone's call quality to the best settings once each:
+// AI noise suppression, H.264 on the graphics card, balanced streaming, 1440p60.
+// Devices, volumes, keys, theme and language are kept.
 const BEST_QUALITY_KEYS = ['noise', 'echo', 'agc', 'voice', 'streamAudio', 'shareRes', 'shareFps', 'videoQuality', 'motion', 'codec'];
 const OLD_DEFAULTS = { voice: 'high', shareRes: 'native', shareFps: '30', videoQuality: 'high' };
 
@@ -53,9 +53,10 @@ const settings = (() => {
     }
   }
   if ((saved.version || 1) < 4) for (const key of BEST_QUALITY_KEYS) delete saved[key];
-  // Version 5: AV1 runs on the CPU and dropped game streams to a few fps, so the
-  // codec moves to H.264 (graphics card) once.
-  if ((saved.version || 1) < 5) delete saved.codec;
+  // Version 5 (1.6.1) resets call quality to the best settings once more: AV1 ran
+  // on the CPU and dropped game streams to a few fps, so it's H.264 on the
+  // graphics card now, with motion-friendly screen shares.
+  if ((saved.version || 1) < 5) for (const key of BEST_QUALITY_KEYS) delete saved[key];
   // The noise switch became a choice; on, and the earlier AI models, become the new AI.
   if (saved.noise === true || saved.noise === 'strong' || saved.noise === 'strongest') delete saved.noise;
   if (saved.noise === false) saved.noise = 'off';
