@@ -228,6 +228,10 @@
           <svg class="off" viewBox="0 0 24 24"><path d="M4 4l16 16M4 15v-3a8 8 0 0 1 2.3-5.7M9.3 4.5A8 8 0 0 1 20 12v3"/><rect x="3" y="14" width="4.5" height="6.5" rx="1.8"/><path d="M16.5 16.5v2.2c0 1 .8 1.8 1.8 1.8h.9"/></svg>
           <span class="sr">Mute everyone else</span>
         </button>
+        <button id="soundBtn" class="ctl" title="Sound" aria-haspopup="dialog" aria-expanded="false">
+          <svg viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/></svg>
+          <span class="sr">Sound</span>
+        </button>
         <button id="screenBtn" class="ctl" title="Share screen">
           <svg viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="12" rx="2.5"/><path d="M8.5 20h7M12 13V8M9.5 10.5L12 8l2.5 2.5"/></svg>
           <span class="sr">Share screen</span>
@@ -247,6 +251,27 @@
           <span class="sr">Leave</span>
         </button>
       </nav>
+
+      <!-- Every volume in one place: yours, each person's, the streams -->
+      <div class="sound-panel" id="soundPanel" role="dialog" aria-label="Sound" hidden>
+        <h3>Sound</h3>
+        <div class="sp-section">
+          <div class="sp-title">Your microphone</div>
+          <label class="sp-row"><span class="sp-name" title="How loud you are for everyone">Your voice</span>
+            <input type="range" class="slider" id="spMic" min="0" max="200" step="1"><span class="sp-pct" id="spMicPct"></span></label>
+        </div>
+        <div class="sp-section">
+          <div class="sp-title">Voices</div>
+          <div id="spPeople"></div>
+          <p class="sp-empty" id="spNobody">Nobody else is here yet</p>
+        </div>
+        <div class="sp-section">
+          <div class="sp-title">Streams and shared screens</div>
+          <label class="sp-row"><span class="sp-name">Everything you watch</span>
+            <input type="range" class="slider" id="spStreams" min="0" max="200" step="1"><span class="sp-pct" id="spStreamsPct"></span></label>
+        </div>
+        <button type="button" class="btn small sp-more" id="spMore">More sound settings</button>
+      </div>
     </div>
 
     <aside class="side" id="side" aria-label="Chat">
@@ -364,6 +389,8 @@
         <h3 class="group-title">Microphone</h3>
         <div class="group">
           <label class="row"><span class="row-label">Input</span><select id="sMic"></select></label>
+          <label class="row"><span class="row-label">Microphone volume</span>
+            <input type="range" class="slider" id="sMicGain" min="0" max="200" step="1"><span class="row-value vol" id="sMicGainText"></span></label>
           <div class="row"><span class="row-label">Level</span>
             <div class="meter"><i id="sMicLevel"></i></div>
             <button type="button" class="btn small" id="sMicTest">Test</button>
@@ -400,7 +427,7 @@
 
         <h3 class="group-title">Volume</h3>
         <div class="group">
-          <label class="row"><span class="row-label">Your friend's voice</span>
+          <label class="row"><span class="row-label">Everyone's voices</span>
             <input type="range" class="slider" id="sVoiceVol" min="0" max="200" step="1"><span class="row-value vol" id="sVoiceVolText"></span></label>
           <label class="row"><span class="row-label">Streams and shared screens</span>
             <input type="range" class="slider" id="sStreamVol" min="0" max="200" step="1"><span class="row-value vol" id="sStreamVolText"></span></label>

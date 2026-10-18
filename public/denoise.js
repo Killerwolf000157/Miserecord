@@ -1,6 +1,7 @@
-// Strong noise suppression for the microphone: a small neural network removes
-// keyboards, fans and background noise before your voice is sent, much better
-// than the built-in filter. Runs on your computer in an audio worklet.
+// The microphone's path before it's sent: optional AI noise suppression, then
+// your microphone volume (0-200%). Runs on your computer in Web Audio.
+// Noise suppression: a small neural network removes keyboards, fans and
+// background noise, much better than the built-in filter.
 //   strong:    RNNoise ("AI, light"), gentle, keeps the full range of your voice
 //   strongest: GTCRN ("AI, strong", the default), removes keyboards and hiss almost
 //              completely; the voice can sound a little narrower
@@ -27,7 +28,7 @@ const Denoise = (() => {
   const loaded = new Map(); // mode -> Promise<ArrayBuffer>
 
   function context() {
-    // Both models work at 48 kHz, the rate Opus sends.
+    // The models work at 48 kHz, the rate Opus sends.
     if (!ctx || ctx.state === 'closed') ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'interactive' });
     return ctx;
   }
@@ -46,34 +47,46 @@ const Denoise = (() => {
     return loaded.get(mode);
   }
 
-  // Returns a stream with the cleaned-up voice. Stopping its track also stops
-  // the microphone and frees the model.
-  async function wrap(raw, mode) {
+  // Returns a stream with the processed voice. Its track has setGain(0..2) for
+  // live volume changes; stopping it also stops the microphone and frees the model.
+  // mode: 'strong' | 'strongest' | anything else for no AI model.
+  async function wrap(raw, { mode, gain = 1 } = {}) {
+    const input = raw.getAudioTracks()[0];
+    if (!input) return raw;
     const m = MODELS[mode];
-    if (!m || !raw.getAudioTracks().length) return raw;
     const c = context();
-    const wasmBinary = await load(mode);
+    const wasmBinary = m ? await load(mode) : null;
     if (c.state === 'suspended') await c.resume().catch(() => {});
+    const channels = m ? 1 : Math.min(2, (input.getSettings && input.getSettings().channelCount) || 1);
     const source = c.createMediaStreamSource(raw);
-    const node = new AudioWorkletNode(c, m.processor, {
-      processorOptions: { maxChannels: 1, wasmBinary, ...(m.options || {}) },
-      channelCount: 1,
-      channelCountMode: 'explicit',
-    });
+    const volume = c.createGain();
+    volume.gain.value = gain;
     const out = c.createMediaStreamDestination();
-    out.channelCount = 1;
-    source.connect(node).connect(out);
+    out.channelCount = channels;
+    let node = null;
+    if (m) {
+      node = new AudioWorkletNode(c, m.processor, {
+        processorOptions: { maxChannels: 1, wasmBinary, ...(m.options || {}) },
+        channelCount: 1,
+        channelCountMode: 'explicit',
+      });
+      source.connect(node).connect(volume);
+    } else {
+      source.connect(volume);
+    }
+    volume.connect(out);
     const track = out.stream.getAudioTracks()[0];
     const stop = MediaStreamTrack.prototype.stop;
+    track.setGain = (v) => volume.gain.setTargetAtTime(Math.max(0, Math.min(2, v)), c.currentTime, 0.02);
     track.stop = () => {
       stop.call(track);
       raw.getTracks().forEach((t) => t.stop());
       source.disconnect();
-      node.disconnect();
-      node.port.postMessage('destroy');
+      volume.disconnect();
+      if (node) { node.disconnect(); node.port.postMessage('destroy'); }
     };
-    // If the mic is unplugged, the cleaned track ends with it.
-    raw.getAudioTracks()[0].addEventListener('ended', () => track.stop());
+    // If the mic is unplugged, the processed track ends with it.
+    input.addEventListener('ended', () => track.stop());
     return out.stream;
   }
 

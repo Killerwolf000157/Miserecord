@@ -1,0 +1,37 @@
+<!doctype html>
+<!-- The glowing frame around a monitor you're sharing. Shown only to you:
+     the desktop app leaves this window out of the capture, and it ignores the mouse. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Miserecord share frame</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+    .frame {
+      position: fixed; inset: 0;
+      padding: 4px;
+      background: linear-gradient(90deg, #7AA2FF, #B28BFF 30%, #FF8CC6 58%, #FFB77A 82%, #8EE3C8);
+      /* only the 4 px border is painted; the middle stays see-through */
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor; mask-composite: exclude;
+    }
+    .glow {
+      position: fixed; inset: 0;
+      box-shadow: inset 0 0 18px 2px rgba(178, 139, 255, .55);
+    }
+    .tag {
+      position: fixed; top: 4px; left: 50%; transform: translateX(-50%);
+      padding: 3px 14px 5px; border-radius: 0 0 12px 12px;
+      background: linear-gradient(90deg, #7AA2FF, #B28BFF, #FF8CC6);
+      color: #fff; font: 600 12px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+      letter-spacing: .01em; text-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+    }
+  </style>
+</head>
+<body>
+  <div class="glow"></div>
+  <div class="frame"></div>
+  <div class="tag" id="tag">Sharing this screen · only you see this frame</div>
+  <script src="share-frame.js"></script>
+</body>
+</html>

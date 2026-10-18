@@ -1033,12 +1033,7 @@ function makePersonCard(id, name) {
   pct.textContent = '100%';
   vol.oninput = () => {
     const peer = state.peers.get(id);
-    if (!peer) return;
-    peer.volume = Number(vol.value);
-    syncSlider(vol);
-    pct.textContent = `${vol.value}%`;
-    pct.classList.toggle('boost', peer.volume > 100);
-    applyVolumes();
+    if (peer) setPeerVolume(peer, Number(vol.value), vol);
   };
   card.querySelector('.kick').onclick = () => {
     const peer = state.peers.get(id);
@@ -1053,10 +1048,12 @@ function setPeerName(peer, name) {
   peer.card.querySelector('.label').textContent = peer.name;
   peer.card.querySelector('.initial').textContent = initial(peer.name);
   peer.card.querySelector('.peer-vol input').setAttribute('aria-label', `${peer.name}'s volume`);
+  if (!$('#soundPanel').hidden) renderSoundPeople();
   for (const id of peer.remote.keys()) renderRemoteStream(peer, id);
 }
 
 function updatePeopleLayout() {
+  if (!$('#soundPanel').hidden) renderSoundPeople();
   const n = state.peers.size;
   const placeholder = $('#peerCard');
   placeholder.hidden = n > 0;
@@ -1468,6 +1465,7 @@ async function toggleScreen() {
   try {
     stream = await navigator.mediaDevices.getDisplayMedia(shareConstraints());
   } catch (err) {
+    shareEnded();
     // Closing the picker is not an error.
     const cancelled = err.name === 'NotAllowedError' || state.pickerCancelled;
     Log.info('media', cancelled ? 'screen share cancelled' : 'screen share failed', `${err.name}: ${err.message}`);
@@ -1502,6 +1500,7 @@ async function streamFile(file) {
   const tile = makeTile({ title: `Streaming: ${file.name}`, remote: false });
   const el = tile.video;
   el.controls = true;
+  tile.el.querySelector('.zoom-btn').hidden = true; // the player's own controls would zoom too
   el.src = url;
   try {
     await el.play();
@@ -1551,6 +1550,12 @@ async function streamFile(file) {
   label($('#mediaBtn'), 'Stop streaming');
 }
 
+// The desktop app hides itself from screen captures and frames the shared
+// monitor while you share; this undoes both.
+function shareEnded() {
+  if (window.miserecordDesktop && window.miserecordDesktop.shareEnded) window.miserecordDesktop.shareEnded();
+}
+
 function publish(kind) {
   const s = state[kind];
   broadcast({ type: 'stream', id: s.stream.id, kind, label: s.label });
@@ -1580,6 +1585,7 @@ function stopLocal(kind, quiet = false) {
   }
   updateStageLayout();
   if (kind === 'screen') {
+    shareEnded();
     $('#screenBtn').classList.remove('active');
     label($('#screenBtn'), 'Share screen');
   } else {
@@ -1732,7 +1738,7 @@ function makeTile({ title, remote }) {
   el.className = `tile${remote ? ' remote' : ''}`;
   el.innerHTML = `
     <div class="audio-art" hidden><div class="orb"></div></div>
-    <video autoplay playsinline></video>
+    <div class="video-wrap"><video autoplay playsinline></video><button type="button" class="zoom-chip" hidden></button></div>
     <div class="tile-bar"><span class="title"></span><span class="actions"></span></div>`;
   const video = el.querySelector('video');
   const titleEl = el.querySelector('.title');
@@ -1743,14 +1749,25 @@ function makeTile({ title, remote }) {
   full.setAttribute('aria-label', 'Full screen');
   full.innerHTML = '<svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>';
   full.onclick = () => enterFocus(el);
-  el.querySelector('.actions').append(full);
+  const zoom = enableZoom(el, video);
+  const zoomBtn = document.createElement('button');
+  zoomBtn.className = 'icon-btn zoom-btn';
+  zoomBtn.title = 'Zoom in';
+  zoomBtn.setAttribute('aria-label', 'Zoom in');
+  zoomBtn.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5M10.5 8v5M8 10.5h5"/></svg>';
+  zoomBtn.onclick = () => zoom.step(1.5);
+  el.querySelector('.actions').append(zoomBtn, full);
   video.addEventListener('dblclick', () => {
-    if (!video.controls) $('.stage-wrap').classList.contains('focus') ? exitFocus() : enterFocus(el);
+    if (video.controls) return;
+    // Zoomed in: double-click goes back to the whole picture first.
+    if (zoom.level() > 1) return zoom.reset();
+    $('.stage-wrap').classList.contains('focus') ? exitFocus() : enterFocus(el);
   });
   new MutationObserver(() => {
     const audioOnly = el.classList.contains('audio-only');
     el.querySelector('.audio-art').hidden = !audioOnly;
     full.hidden = audioOnly;
+    zoomBtn.hidden = audioOnly || video.controls;
   }).observe(el, { attributes: true, attributeFilter: ['class'] });
   // Remote tiles first, your own previews after them.
   const tiles = $('#tiles');
@@ -1758,6 +1775,79 @@ function makeTile({ title, remote }) {
   else tiles.append(el);
   updateStageLayout();
   return { el, video, setTitle: (t) => { titleEl.textContent = t; } };
+}
+
+// Zoom into a stream: scroll (in full screen, or Ctrl+scroll on the stage) zooms
+// around the pointer, dragging moves around, double-click or the chip resets.
+const MAX_ZOOM = 8;
+
+function enableZoom(tile, video) {
+  const chip = tile.querySelector('.zoom-chip');
+  let z = 1, x = 0, y = 0;
+  let drag = null;
+
+  const size = () => ({ w: video.offsetWidth, h: video.offsetHeight });
+  const clamp = () => {
+    const { w, h } = size();
+    x = Math.min(0, Math.max(w - w * z, x));
+    y = Math.min(0, Math.max(h - h * z, y));
+  };
+  const render = () => {
+    clamp();
+    video.style.transform = z > 1 ? `translate(${x}px, ${y}px) scale(${z})` : '';
+    tile.classList.toggle('zoomed', z > 1);
+    chip.hidden = z <= 1;
+    chip.textContent = `${Math.round(z * 100)}%`;
+    chip.title = 'Back to the whole picture';
+  };
+  // Zoom to a new level, keeping the point under (cx, cy) where it is.
+  const zoomAt = (next, cx, cy) => {
+    next = Math.min(MAX_ZOOM, Math.max(1, next));
+    const lx = (cx - x) / z, ly = (cy - y) / z;
+    z = next;
+    x = cx - z * lx;
+    y = cy - z * ly;
+    if (z === 1) { x = 0; y = 0; }
+    render();
+  };
+  const local = (e) => {
+    const r = video.parentElement.getBoundingClientRect();
+    return [e.clientX - r.left, e.clientY - r.top];
+  };
+
+  video.addEventListener('wheel', (e) => {
+    if (video.controls) return;
+    const focused = tile.classList.contains('focused');
+    if (!focused && !e.ctrlKey) return; // on the stage, plain scrolling scrolls the page
+    e.preventDefault();
+    const [cx, cy] = local(e);
+    zoomAt(z * Math.pow(1.0015, -e.deltaY), cx, cy);
+  }, { passive: false });
+
+  video.addEventListener('pointerdown', (e) => {
+    if (z <= 1 || e.button !== 0) return;
+    drag = { id: e.pointerId, sx: e.clientX, sy: e.clientY, x, y };
+    video.setPointerCapture(e.pointerId);
+    tile.classList.add('panning');
+  });
+  video.addEventListener('pointermove', (e) => {
+    if (!drag || drag.id !== e.pointerId) return;
+    x = drag.x + (e.clientX - drag.sx);
+    y = drag.y + (e.clientY - drag.sy);
+    render();
+  });
+  const endDrag = () => { drag = null; tile.classList.remove('panning'); };
+  video.addEventListener('pointerup', endDrag);
+  video.addEventListener('pointercancel', endDrag);
+  chip.addEventListener('click', () => zoomAt(1, 0, 0));
+  // Keep the picture in bounds when the tile changes size (full screen, window).
+  new ResizeObserver(render).observe(video);
+
+  return {
+    level: () => z,
+    reset: () => zoomAt(1, 0, 0),
+    step: (factor) => { const { w, h } = size(); zoomAt(z * factor, w / 2, h / 2); },
+  };
 }
 
 // Each person's speaking ring follows whichever of their streams is their mic.
@@ -1907,3 +1997,4 @@ initManual();
 initLobby();
 initChat();
 initControls();
+initSoundPanel();

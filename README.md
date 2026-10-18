@@ -14,7 +14,8 @@ Private calls with your friends, 1:1 or in groups of up to 8, with no server to 
   stats of what's actually being sent and received
 - **Push to talk and shortcuts** (mute, leave), with side mouse buttons supported. In the desktop app they work even while a game is in front
 - **AI noise suppression** that runs on your computer and removes keyboards, fans and hiss (Settings > Audio)
-- **Separate volume** for your friend's voice and for streams, and for each person up to 200%
+- **Sound panel** (speaker button in the call): your microphone volume, each person's voice and the streams, up to 200%
+- **Zoom into streams**: the magnifier button, or scroll in full screen (Ctrl+scroll on the stage); drag to move, double-click to reset
 - **Mute everyone else** next to Mute: silences every voice and stream you receive
 - **Quick quality switch** (Low / Medium / High) on your own screen share or stream
 - **Optional soft ringtone** for incoming calls, off by default
@@ -35,7 +36,7 @@ The installer isn't code-signed yet, so Windows SmartScreen may say "Windows pro
 Click **More info → Run anyway**.
 
 The desktop app adds:
-- an in-app screen picker with full computer sound on Windows, leaving out Miserecord's own sound so friends never hear themselves
+- an in-app screen picker with full computer sound on Windows, leaving out Miserecord's own sound so friends never hear themselves; while you share a monitor, Miserecord hides itself from the capture (no mirror effect) and a rainbow frame only you can see marks the shared screen
 - its own top bar with the real Windows minimize, maximize and close buttons
 - running in the tray when you close the window, so friends can still call you, and an
   option to start hidden with Windows (Settings → General)

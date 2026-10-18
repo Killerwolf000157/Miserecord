@@ -22,6 +22,7 @@ const SETTINGS_DEFAULTS = {
   motion: 'auto',
   codec: 'auto',
   language: 'auto',     // auto follows Windows; en | fr
+  micGain: 100,         // your microphone volume for everyone, 0-200%
 };
 
 // Earlier versions saved their (lower) defaults with every settings change.
@@ -87,16 +88,24 @@ async function getRawMic() {
   }
 }
 
-// The microphone, through strong noise suppression when that's on. If the
-// model can't load, the call still goes ahead with the plain microphone.
+// The microphone, through AI noise suppression when that's on and your
+// microphone volume. If that can't start, the call still goes ahead with the
+// plain microphone.
 async function getMic() {
   const raw = await getRawMic();
-  if (isHifi() || !Denoise.modes.includes(settings.noise)) return raw;
   try {
-    return await Denoise.wrap(raw, settings.noise);
+    return await Denoise.wrap(raw, { mode: isHifi() ? 'off' : settings.noise, gain: settings.micGain / 100 });
   } catch (err) {
-    Log.warn('media', 'noise suppression unavailable, using the plain microphone', err);
+    Log.warn('media', 'microphone processing unavailable, using the plain microphone', err);
     return raw;
+  }
+}
+
+// Change your microphone volume live, without restarting the microphone.
+function applyMicGain() {
+  for (const stream of [state.mic, state.testMic && state.testMic.stream]) {
+    const track = stream && stream.getAudioTracks()[0];
+    if (track && track.setGain) track.setGain(settings.micGain / 100);
   }
 }
 

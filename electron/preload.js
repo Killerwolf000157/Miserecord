@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('miserecordDesktop', {
   onPickSources(callback) {
     ipcRenderer.on('pick-sources', (_e, update) => callback(update));
   },
+  // The page tells us when a screen share stops: the frame goes, captures see the app again.
+  shareEnded: () => ipcRenderer.send('share-ended'),
   pickSource(requestId, sourceId, audio) {
     ipcRenderer.send(`source-picked-${Number(requestId)}`, sourceId ? { sourceId: String(sourceId), audio: !!audio } : null);
   },

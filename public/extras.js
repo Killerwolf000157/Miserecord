@@ -83,6 +83,84 @@ const Playback = {
   },
 };
 
+// ------------------------------------------------------------------ sound panel
+// The speaker button in the dock: your microphone, each person and the streams,
+// each with its own slider, so it's clear what changes what.
+function initSoundPanel() {
+  const panel = $('#soundPanel');
+  const btn = $('#soundBtn');
+  btn.onclick = () => (panel.hidden ? openSoundPanel() : closeSoundPanel());
+  document.addEventListener('mousedown', (e) => {
+    if (!panel.hidden && !panel.contains(e.target) && !btn.contains(e.target)) closeSoundPanel();
+  });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) closeSoundPanel(); });
+  bindVolume($('#spMic'), $('#spMicPct'), 'micGain', applyMicGain);
+  bindVolume($('#spStreams'), $('#spStreamsPct'), 'streamVolume', applyVolumes);
+  $('#spMore').onclick = () => { closeSoundPanel(); openSettings(); showTab('audio'); };
+}
+
+function bindVolume(input, pct, key, apply) {
+  input.oninput = () => {
+    setSetting(key, Number(input.value));
+    syncSlider(input);
+    pct.textContent = `${input.value}%`;
+    apply();
+  };
+}
+
+function openSoundPanel() {
+  for (const [id, key] of [['#spMic', 'micGain'], ['#spStreams', 'streamVolume']]) {
+    syncSlider($(id), settings[key]);
+    $(`${id}Pct`).textContent = `${settings[key]}%`;
+  }
+  renderSoundPeople();
+  $('#soundPanel').hidden = false;
+  $('#soundBtn').setAttribute('aria-expanded', 'true');
+  $('#soundBtn').classList.add('open');
+}
+
+function closeSoundPanel() {
+  $('#soundPanel').hidden = true;
+  $('#soundBtn').setAttribute('aria-expanded', 'false');
+  $('#soundBtn').classList.remove('open');
+}
+
+// One row per person in the call; rebuilt when people come and go.
+function renderSoundPeople() {
+  const box = $('#spPeople');
+  box.textContent = '';
+  const peers = [...state.peers.values()];
+  $('#spNobody').hidden = peers.length > 0;
+  for (const peer of peers) {
+    const row = document.createElement('label');
+    row.className = 'sp-row';
+    row.innerHTML = '<span class="sp-name" translate="no"></span><input type="range" class="slider" min="0" step="1"><span class="sp-pct"></span>';
+    row.querySelector('.sp-name').textContent = peer.name || '…';
+    const input = row.querySelector('input');
+    input.max = MAX_VOLUME;
+    input.setAttribute('aria-label', `${peer.name}'s volume`);
+    syncSlider(input, peer.volume);
+    row.querySelector('.sp-pct').textContent = `${peer.volume}%`;
+    input.oninput = () => setPeerVolume(peer, Number(input.value), input);
+    box.append(row);
+  }
+}
+
+// A person's voice volume, kept the same on their card and in the sound panel.
+function setPeerVolume(peer, value, from) {
+  peer.volume = value;
+  const card = peer.card && peer.card.querySelector('.peer-vol input');
+  const sliders = [card, ...[...$('#spPeople').querySelectorAll('input')].filter((i) => i.getAttribute('aria-label') === `${peer.name}'s volume`)];
+  for (const s of sliders) {
+    if (!s) continue;
+    if (s !== from) s.value = value;
+    syncSlider(s);
+    const pct = s.parentElement.querySelector('.sp-pct, .peer-vol-pct');
+    if (pct) { pct.textContent = `${value}%`; pct.classList.toggle('boost', value > 100); }
+  }
+  applyVolumes();
+}
+
 function applyVolumes() {
   for (const peer of state.peers.values()) {
     for (const entry of peer.remote.values()) {
@@ -341,13 +419,14 @@ function finishCapture(binding) {
 
 function initExtras() {
   // Volume
-  for (const [id, key] of [['#sVoiceVol', 'voiceVolume'], ['#sStreamVol', 'streamVolume'], ['#sRingVol', 'ringVolume']]) {
+  for (const [id, key] of [['#sMicGain', 'micGain'], ['#sVoiceVol', 'voiceVolume'], ['#sStreamVol', 'streamVolume'], ['#sRingVol', 'ringVolume']]) {
     const input = $(id);
     syncSlider(input, settings[key]);
     input.oninput = () => {
       setSetting(key, Number(input.value));
       syncSlider(input);
-      if (key !== 'ringVolume') applyVolumes();
+      if (key === 'micGain') applyMicGain();
+      else if (key !== 'ringVolume') applyVolumes();
       const text = $(`${id}Text`);
       if (text) text.textContent = `${input.value}%`;
     };
@@ -446,7 +525,7 @@ function initExtras() {
 
 // Called when the settings sheet opens.
 function syncExtras() {
-  for (const [id, key] of [['#sVoiceVol', 'voiceVolume'], ['#sStreamVol', 'streamVolume'], ['#sRingVol', 'ringVolume']]) {
+  for (const [id, key] of [['#sMicGain', 'micGain'], ['#sVoiceVol', 'voiceVolume'], ['#sStreamVol', 'streamVolume'], ['#sRingVol', 'ringVolume']]) {
     syncSlider($(id), settings[key]);
     const text = $(`${id}Text`);
     if (text) text.textContent = `${settings[key]}%`;
