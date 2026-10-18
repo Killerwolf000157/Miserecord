@@ -85,7 +85,10 @@ function setBackground(on) {
 
 // ---------------------------------------------------------------- startup
 function start() {
-  app.setAppUserModelId('com.killerwolf000157.miserecord');
+  // Windows caches the taskbar icon per app ID. Development runs use electron.exe
+  // (the default atom icon), so they get their own ID and can't overwrite the
+  // installed app's cached icon.
+  app.setAppUserModelId(app.isPackaged ? 'com.killerwolf000157.miserecord' : 'com.killerwolf000157.miserecord.dev');
   loadPrefs();
 
   protocol.handle('app', async (request) => {
