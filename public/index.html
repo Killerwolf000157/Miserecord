@@ -25,7 +25,7 @@
     </div>
 
     <div id="insecure" class="notice" hidden>
-      This browser blocks the microphone and screen sharing here. Open <strong>index.html</strong> directly from its folder.
+      Miserecord can't use your microphone or share your screen from here. Open the Miserecord app, or open <strong>index.html</strong> directly from its folder.
     </div>
 
     <form id="joinForm" autocomplete="off">
@@ -316,7 +316,7 @@
           <div class="row"><span class="row-label" id="sFriendCount"></span>
             <button type="button" class="btn small danger-text" id="sForget">Remove all</button></div>
         </div>
-        <p class="group-note">Friends and your key are kept only in this browser. Removing them means swapping codes again.</p>
+        <p class="group-note">Friends and your key are kept only on this computer. Removing them means swapping codes again.</p>
 
         <div id="sAbout" hidden>
           <h3 class="group-title">Running in the background</h3>
@@ -400,7 +400,7 @@
         <div class="group">
           <label class="row"><span class="row-label">Speaker</span><select id="sSpeaker"></select></label>
         </div>
-        <p class="group-note" id="sSpeakerNote" hidden>This browser always plays through your system's default speaker. Change it in your computer's sound settings.</p>
+        <p class="group-note" id="sSpeakerNote" hidden>Miserecord plays through your system's default speaker here. Change it in your computer's sound settings.</p>
       </section>
 
       <!-- Video -->
@@ -426,7 +426,7 @@
         <div class="group">
           <label class="row"><span class="row-label">Bitrate</span>
             <select id="sQuality">
-              <option value="auto">Browser default, about 2.5 Mbps</option>
+              <option value="auto">Automatic, about 2.5 Mbps</option>
               <option value="low">Low, up to 2.5 Mbps</option>
               <option value="high">Medium, up to 8 Mbps</option>
               <option value="veryhigh">High, up to 20 Mbps</option>
@@ -478,7 +478,7 @@
       <section data-panel="network" hidden>
         <h3 class="group-title">STUN servers</h3>
         <textarea id="stun" rows="3" spellcheck="false" aria-label="STUN servers, one per line"></textarea>
-        <p class="group-note">One per line. STUN only tells your browser its public address so you and your friend can find each other.
+        <p class="group-note">One per line. STUN only tells Miserecord your public address so you and your friend can find each other.
           Your audio, video and files never pass through it. Clear the box to stay on your local network with no outside servers.</p>
 
         <h3 class="group-title">Relays for calling saved friends</h3>

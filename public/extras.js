@@ -264,7 +264,7 @@ function renderKeycaps() {
   if (!settings.pttKey && settings.ptt && capturing !== 'pttKey') $('#sPttKey').textContent = 'Set a talk key';
   $('#sKeysNote').textContent = state.globalHotkeys
     ? 'These work everywhere, even while a game or another app is in front.'
-    : "In the browser these only work while Miserecord is the active window. The desktop app makes them work everywhere, even in games.";
+    : "Right now these only work while the Miserecord window is active. In the installed app they work everywhere, even in games.";
 }
 
 function finishCapture(binding) {
