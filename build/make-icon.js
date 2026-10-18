@@ -1,10 +1,10 @@
-// Draws the Miserecord app icon: a white circle with a rainbow wave in the lower middle
-// (the same design as build/logo-concept.svg and public/logo.svg).
+// Draws the Miserecord app icon: a white circle half filled with rainbow liquid,
+// with a wavy surface across the middle (the same design as public/logo.svg).
 //   build/icon.png  512×512, for Electron and the installer
 //   build/icon.ico  16–256 px in one file, so Windows shows a crisp icon on
 //                   the taskbar, title bar, Start menu, desktop and tray
 // Each size is drawn directly at that size, not scaled down. Small sizes get a
-// fuller circle and a thicker wave so the wave stays readable at 16 px.
+// fuller circle and fewer, taller waves so the surface stays readable at 16 px.
 // Run with: npm run icon
 'use strict';
 
@@ -14,57 +14,33 @@ const zlib = require('zlib');
 
 const ICO_SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 const hex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-// The app's aurora colors along the wave, left to right (x in 512-unit space).
-const WAVE_STOPS = [[0, '#7AA2FF'], [0.3, '#B28BFF'], [0.58, '#FF8CC6'], [0.82, '#FFB77A'], [1, '#8EE3C8']].map(([t, c]) => [t, hex(c)]);
-const WAVE_X0 = 138;
-const WAVE_X1 = 374;
+// The app's aurora colors across the liquid, left to right (x in 512-unit space).
+const LIQUID_STOPS = [[0, '#7AA2FF'], [0.3, '#B28BFF'], [0.58, '#FF8CC6'], [0.82, '#FFB77A'], [1, '#8EE3C8']].map(([t, c]) => [t, hex(c)]);
+const LIQUID_X0 = 34;
+const LIQUID_X1 = 478;
 const FACE_IN = hex('#FFFFFF');
 const FACE_OUT = hex('#E9EAF0');
 
-// The wave's centre line, as in the SVG: M144 338 C 178 296, 226 300, 258 326 S 332 374, 370 330
-const CURVES = [
-  [[144, 338], [178, 296], [226, 300], [258, 326]],
-  [[258, 326], [290, 352], [332, 374], [370, 330]],
-];
-const WAVE_POINTS = (() => {
-  const pts = [];
-  for (const [p0, p1, p2, p3] of CURVES) {
-    for (let i = 0; i <= 80; i++) {
-      const t = i / 80, u = 1 - t;
-      pts.push([
-        u * u * u * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t * t * t * p3[0],
-        u * u * u * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t * t * t * p3[1],
-      ]);
-    }
-  }
-  return pts;
-})();
-
-function distToWave(x, y) {
-  let best = Infinity;
-  for (let i = 1; i < WAVE_POINTS.length; i++) {
-    const [ax, ay] = WAVE_POINTS[i - 1];
-    const [bx, by] = WAVE_POINTS[i];
-    const dx = bx - ax, dy = by - ay;
-    const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / (dx * dx + dy * dy || 1)));
-    const ex = x - (ax + t * dx), ey = y - (ay + t * dy);
-    const d = ex * ex + ey * ey;
-    if (d < best) best = d;
-  }
-  return Math.sqrt(best);
+// The surface, as in the SVG: quadratic arcs from x = 20, alternating up and down.
+// Each arc of width w with control offset c peaks at c / 2 above (or below) the level.
+function surfaceY(x, level, w, c) {
+  const n = Math.floor((x - 20) / w);
+  const f = (x - 20) / w - n;
+  const dir = n % 2 === 0 ? -1 : 1; // first arc bulges up
+  return level + dir * c * 2 * f * (1 - f);
 }
 
-function waveColor(x) {
-  const t = Math.max(0, Math.min(1, (x - WAVE_X0) / (WAVE_X1 - WAVE_X0)));
-  for (let i = 1; i < WAVE_STOPS.length; i++) {
-    const [t1, c1] = WAVE_STOPS[i];
-    const [t0, c0] = WAVE_STOPS[i - 1];
+function liquidColor(x) {
+  const t = Math.max(0, Math.min(1, (x - LIQUID_X0) / (LIQUID_X1 - LIQUID_X0)));
+  for (let i = 1; i < LIQUID_STOPS.length; i++) {
+    const [t1, c1] = LIQUID_STOPS[i];
+    const [t0, c0] = LIQUID_STOPS[i - 1];
     if (t <= t1) {
       const f = (t - t0) / (t1 - t0);
       return c0.map((c, k) => c + (c1[k] - c) * f);
     }
   }
-  return WAVE_STOPS[WAVE_STOPS.length - 1][1];
+  return LIQUID_STOPS[LIQUID_STOPS.length - 1][1];
 }
 
 // RGBA pixels of the logo at the given size.
@@ -73,7 +49,9 @@ function drawLogo(size) {
   const k = size / 512; // pixels per design unit
   const small = size <= 32;
   const r = small ? 250 : 238; // circle radius in design units
-  const half = size <= 24 ? 34 : size <= 48 ? 29 : 22; // half the wave's thickness
+  const w = small ? 118 : 59; // width of one arc of the surface
+  const c = small ? 36 : 22; // how far each arc bulges (twice its height)
+  const level = 262; // the surface sits just below the centre, as in the SVG
   const ss = size <= 64 ? 8 : size <= 128 ? 5 : 3; // supersampling
   const gx = 256 - r + 0.76 * r, gy = 256 - r + 0.6 * r, gr = 1.64 * r; // soft shading centre
   for (let y = 0; y < size; y++) {
@@ -86,15 +64,17 @@ function drawLogo(size) {
           const dc = Math.hypot(ux - 256, uy - 256);
           if (dc > r) continue;
           let col;
-          const nearWave = ux > 100 && ux < 412 && uy > 270 && uy < 410;
-          if (nearWave && distToWave(ux, uy) <= half) {
-            col = waveColor(ux);
+          if (uy >= surfaceY(ux, level, w, c)) {
+            col = liquidColor(ux);
+            // light catching the surface, fading into the depth
+            const sheen = 0.45 * Math.max(0, Math.min(1, 1 - (uy - (level - 22)) / 104));
+            col = col.map((v) => v + (255 - v) * sheen);
           } else {
             const t = Math.min(1, Math.hypot(ux - gx, uy - gy) / gr);
-            col = FACE_IN.map((c, i) => c + (FACE_OUT[i] - c) * t);
-            // a faint edge so the circle holds up on light backgrounds
-            if (r - dc < 1 / k) col = col.map((c) => c * 0.92);
+            col = FACE_IN.map((v, i) => v + (FACE_OUT[i] - v) * t);
           }
+          // a faint edge so the circle holds up on light backgrounds
+          if (r - dc < 1 / k) col = col.map((v) => v * 0.92);
           acc = [acc[0] + col[0], acc[1] + col[1], acc[2] + col[2], acc[3] + 1];
         }
       }

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <title>Miserecord logo concept 2: white circle half filled with rainbow, wavy surface</title>
+  <defs>
+    <clipPath id="inside"><circle cx="256" cy="252" r="222"/></clipPath>
+    <!-- The app's aurora colors, left to right -->
+    <linearGradient id="aurora" gradientUnits="userSpaceOnUse" x1="34" y1="0" x2="478" y2="0">
+      <stop offset="0" stop-color="#7AA2FF"/>
+      <stop offset="0.3" stop-color="#B28BFF"/>
+      <stop offset="0.58" stop-color="#FF8CC6"/>
+      <stop offset="0.82" stop-color="#FFB77A"/>
+      <stop offset="1" stop-color="#8EE3C8"/>
+    </linearGradient>
+    <!-- Light catching the surface, fading into the depth -->
+    <linearGradient id="sheen" gradientUnits="userSpaceOnUse" x1="0" y1="236" x2="0" y2="340">
+      <stop offset="0" stop-color="#fff" stop-opacity=".45"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="face" cx="0.38" cy="0.3" r="0.82">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E9EAF0"/>
+    </radialGradient>
+    <filter id="lift" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#000" flood-opacity=".16"/>
+    </filter>
+  </defs>
+  <circle cx="256" cy="252" r="222" fill="url(#face)" filter="url(#lift)"/>
+  <g clip-path="url(#inside)">
+    <!-- Four soft waves across the middle; quadratic curves alternate up and down -->
+    <path id="liquid" d="M20 258 q 29.5 -22 59 0 t 59 0 t 59 0 t 59 0 t 59 0 t 59 0 t 59 0 t 59 0 V 512 H 20 Z" fill="url(#aurora)"/>
+    <path d="M20 258 q 29.5 -22 59 0 t 59 0 t 59 0 t 59 0 t 59 0 t 59 0 t 59 0 t 59 0 V 512 H 20 Z" fill="url(#sheen)"/>
+  </g>
+  <circle cx="256" cy="252" r="221.5" fill="none" stroke="#000" stroke-opacity=".08"/>
+</svg>
