@@ -4,3 +4,6 @@ certs/
 *.log
 .DS_Store
 Thumbs.db
+
+# native helper build output
+native/*/target/
