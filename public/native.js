@@ -78,9 +78,17 @@ const Native = {
       // Every viewer waits this long anyway: the encoder may spread bits over it.
       // Settled for a second first: a viewer joining says its delay right after, and
       // each change restarts the encoder.
+      // Longer waits are used after a second; shorter ones after 10 s, since a
+      // viewer's automatic delay often dips and comes back.
       onDelay: (ms) => {
         clearTimeout(this.delayTimer);
-        this.delayTimer = setTimeout(() => { desk.engineControl(`buffer ${ms}`); Log.info('engine', 'viewers delay', { ms }); }, 1000);
+    this.bufferMs = 0;
+        const up = ms > (this.bufferMs || 0);
+        this.delayTimer = setTimeout(() => {
+          this.bufferMs = ms;
+          desk.engineControl(`buffer ${ms}`);
+          Log.info('engine', 'viewers delay', { ms });
+        }, up ? 1000 : 10000);
       },
     });
     for (const peer of state.peers.values()) this.addViewer(peer);
@@ -107,6 +115,7 @@ const Native = {
     this.info = null;
     this.streamId = null;
     clearTimeout(this.delayTimer);
+    this.bufferMs = 0;
     const desk = window.miserecordDesktop;
     if (desk && desk.engineStop) desk.engineStop();
   },
@@ -139,9 +148,12 @@ const Native = {
     const roomUp = this.level > this.ceiling && rate >= LEVELS[this.level - 1].mbps * 1e6 * 1.25;
     this.good = !starved && !slowEncoder && roomUp ? this.good + 1 : 0;
     if (now - this.changedAt < 6000) return;
-    if ((this.bad >= 3 || this.slow >= 4) && this.level < LEVELS.length - 1) {
+    // Viewers a second or more behind absorb dips in their buffer: give the line
+    // longer before giving up resolution.
+    const patience = (this.bufferMs || 0) >= 1000 ? 6 : 3;
+    if ((this.bad >= patience || this.slow >= 4) && this.level < LEVELS.length - 1) {
       if (this.upAt && now - this.upAt < 20000) this.holdUp = true;
-      this.setLevel(this.level + 1, this.bad >= 3 ? `only ${(rate / 1e6).toFixed(1)} Mbps gets through` : 'the graphics card is busy');
+      this.setLevel(this.level + 1, this.bad >= patience ? `only ${(rate / 1e6).toFixed(1)} Mbps gets through` : 'the graphics card is busy');
     } else if (this.good >= 15 && !this.holdUp) {
       this.upAt = now;
       this.setLevel(this.level - 1, 'room for more');
@@ -205,13 +217,14 @@ const Native = {
 async function syncEngineStreams() {
   for (const peer of state.peers.values()) {
     if (!peer.engineRx || peer.pc.connectionState !== 'connected') continue;
-    // Stream delay (settings): frames are held back this long, and so is the sound.
-    const delay = Math.max(0, Math.min(3000, Number(settings.streamDelay) || 0));
-    peer.engineRx.setDelay(delay);
+    // Stream delay (settings): frames are held back this long, and so is the sound;
+    // 'auto' lets each stream find the least that keeps it smooth (engine.js).
+    peer.engineRx.setDelay(settings.streamDelay === 'auto' ? 'auto' : Math.max(0, Math.min(3000, Number(settings.streamDelay) || 0)));
     const list = peer.engineRx.streamsInfo();
     if (!list.length) continue;
     const stats = await peer.pc.getStats().catch(() => null);
     for (const info of list) {
+      const delay = info.delay || 0;
       const entry = peer.remote.get(info.id);
       const audio = entry && entry.stream.getAudioTracks()[0];
       let target = 50;

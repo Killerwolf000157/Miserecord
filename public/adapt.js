@@ -228,6 +228,20 @@ function toggleStreamInfo(tileEl) {
   refreshStreamInfo();
 }
 
+// How far behind live a native stream plays here (stream delay), for Stream info.
+function streamDelayText(tile) {
+  for (const peer of state.peers.values()) {
+    if (!peer.engineRx) continue;
+    for (const info of peer.engineRx.streamsInfo()) {
+      const entry = peer.remote.get(info.id);
+      if (!entry || !entry.tile || entry.tile.el !== tile) continue;
+      const secs = I18n.t('{0} s behind', ((info.delay || 0) / 1000).toFixed(1));
+      return info.auto ? `${secs} (${I18n.t('automatic')})` : secs;
+    }
+  }
+  return '';
+}
+
 // Fill every open Stream info box: what the sender reports, and what arrives here.
 async function refreshStreamInfo() {
   for (const box of document.querySelectorAll('.stream-info')) {
@@ -255,6 +269,7 @@ async function refreshStreamInfo() {
       send = state.sendStats;
     }
     const lines = [];
+    const delayLine = tile.classList.contains('remote') ? streamDelayText(tile) : '';
     if (send) {
       lines.push(`<b>${I18n.t('Sending')}</b> ${send.size} · ${send.sent} fps${send.capture != null ? ` (${I18n.t('captured {0}', send.capture)})` : ''} · ${send.codec}${send.gpu ? ` ${I18n.t('on the graphics card')}` : ` ${I18n.t('on the processor')}`}`);
       // WebRTC only measures the upload as high as what it sends, so the number means
@@ -267,6 +282,7 @@ async function refreshStreamInfo() {
       lines.push(I18n.t('Waiting for numbers from the sender…'));
     }
     if (recv) lines.push(`<b>${I18n.t('Receiving')}</b> ${recv}`);
+    if (delayLine) lines.push(`<b>${I18n.t('Delay')}</b> ${delayLine}`);
     box.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
   }
 }

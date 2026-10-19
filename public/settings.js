@@ -30,7 +30,7 @@ const SETTINGS_DEFAULTS = {
   adaptive: true,       // smart streaming: start where this computer can, step down when it struggles
   engine: true,         // native capture + hardware encoder for screen shares, when everyone can show it
   enhance: true,        // sharpen native streams (and upscale them to the screen) on this computer's GPU
-  streamDelay: '1500',  // ms native streams I watch run behind live, for a smoother, sharper picture ('0' = live)
+  streamDelay: 'auto',  // native streams I watch: 'auto' (as little delay as keeps them smooth), or ms behind live ('0' = live)
   // While you share a whole screen, leave Miserecord's window out of the capture
   // (no endless mirror). Windows then also leaves it out of screenshots.
   hideFromShare: true,
@@ -39,7 +39,7 @@ const SETTINGS_DEFAULTS = {
 // Earlier versions saved their (lower) defaults with every settings change.
 // Values still equal to those old defaults were never picked by hand, so they
 // move up to the new ones. Anything you chose yourself stays.
-const SETTINGS_VERSION = 5;
+const SETTINGS_VERSION = 6;
 // Versions 4 and 5 moved everyone's call quality to the best settings once each:
 // AI noise suppression, H.264 on the graphics card, balanced streaming, 1440p60.
 // Devices, volumes, keys, theme and language are kept.
@@ -64,6 +64,8 @@ const settings = (() => {
   // on the CPU and dropped game streams to a few fps, so it's H.264 on the
   // graphics card now, with motion-friendly screen shares.
   if ((saved.version || 1) < 5) for (const key of BEST_QUALITY_KEYS) delete saved[key];
+  // Version 6 (2.0.6): the stream delay became automatic; 2.0.5's fixed default moves to it.
+  if ((saved.version || 1) < 6 && saved.streamDelay === '1500') delete saved.streamDelay;
   // The noise switch became a choice; on, and the earlier AI models, become the new AI.
   if (saved.noise === true || saved.noise === 'strong' || saved.noise === 'strongest') delete saved.noise;
   if (saved.noise === false) saved.noise = 'off';

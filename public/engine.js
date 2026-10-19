@@ -341,7 +341,7 @@ const Engine = (() => {
   function createReceiver({ dc, send, onTrack, onEnd, enhance = () => false }) {
     const streams = new Map(); // stream number -> state
     const st = { frames: 0, lost: 0, decoded: 0, late: 0, shown: 0 };
-    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, reordered: 0, stalls: 0, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0, enhanced: 0, enhanceMs: 0 };
+    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, reordered: 0, stalls: 0, delayUps: 0, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0, enhanced: 0, enhanceMs: 0 };
 
     function askKey(s) {
       const now = performance.now();
@@ -356,11 +356,11 @@ const Engine = (() => {
       let s = streams.get(number);
       if (!s) {
         const generator = new MediaStreamTrackGenerator({ kind: 'video' });
-        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), ready: new Map(), next: null, waitSince: 0, held: [], holdTimer: null, delay: viewDelay, arrBest: Infinity, arrRecent: Infinity, arrAt: performance.now(), needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now(), queue: [], timer: null, target: 50 };
+        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), ready: new Map(), next: null, waitSince: 0, held: [], holdTimer: null, delay: 0, auto: false, lateness: [], raisedAt: 0, told: -1, arrBest: Infinity, arrRecent: Infinity, arrAt: performance.now(), needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now(), queue: [], timer: null, target: 50 };
         streams.set(number, s);
         s.config = msg;
         onTrack(generator, msg);
-        if (viewDelay) send({ type: 'engine-delay', stream: number, ms: viewDelay });
+        applyDelay(s);
       }
       const sameCodec = s.config && s.config.codec === msg.codec && s.decoder && s.decoder.state === 'configured';
       s.config = msg;
@@ -429,6 +429,7 @@ const Engine = (() => {
       if (now - s.arrAt > 3000) { s.arrBest = s.arrRecent; s.arrRecent = Infinity; s.arrAt = now; }
       s.arrRecent = Math.min(s.arrRecent, d);
       s.arrBest = Math.min(s.arrBest, d);
+      if (s.auto) noteLateness(s, d - s.arrBest, now);
       if (f.key && (s.next === null || no >= s.next)) {
         // A keyframe needs nothing before it: start over from here.
         for (const k of s.ready.keys()) if (k < no) s.ready.delete(k);
@@ -500,7 +501,9 @@ const Engine = (() => {
       clearTimeout(s.holdTimer);
     }
 
+    let ticks = 0;
     const feedback = setInterval(() => {
+      if (++ticks % 4 === 0) for (const s of streams.values()) if (s.auto) tuneDelay(s);
       for (const s of streams.values()) {
         send({ type: 'engine-feedback', stream: s.number, frames: st.frames, lost: st.lost, queue: s.decoder ? s.decoder.decodeQueueSize : 0 });
       }
@@ -574,22 +577,69 @@ const Engine = (() => {
       if (s) s.target = Math.max(30, Math.min(400, ms));
     }
 
-    // Extra delay for quality (ms, 0 = live), for every stream; the sender is told
-    // so it can use the room.
+    // Stream delay (ms, 0 = live) for every stream, or 'auto': as little as keeps
+    // the picture smooth. The sender is told, so it can use the room.
     let viewDelay = 0;
     function setDelay(ms) {
-      ms = Math.max(0, Math.min(3000, ms | 0));
+      ms = ms === 'auto' ? 'auto' : Math.max(0, Math.min(MAX_DELAY, ms | 0));
       if (ms === viewDelay) return;
       viewDelay = ms;
-      for (const s of streams.values()) {
-        s.delay = ms;
-        release(s);
-        send({ type: 'engine-delay', stream: s.number, ms });
+      for (const s of streams.values()) applyDelay(s);
+    }
+
+    function applyDelay(s) {
+      s.auto = viewDelay === 'auto';
+      if (!s.auto) setStreamDelay(s, viewDelay);
+      else if (!s.delay) setStreamDelay(s, AUTO_START);
+      else tellSender(s);
+    }
+
+    // Automatic delay. How late each frame gets here (against the quickest one
+    // recently) is noted; the delay covers nearly all of it plus a margin, so even
+    // a slow upload, a stall or a big frame shows up in time. A frame that misses
+    // its moment raises the delay right away (one short pause, instead of one at
+    // every hiccup); a calm line lowers it slowly after 15 s, 20 ms every 2 s:
+    // about one frame skipped each time, which doesn't show.
+    const MAX_DELAY = 3000, AUTO_START = 1000, AUTO_MIN = 400, MARGIN = 250;
+    function noteLateness(s, late, now) {
+      s.lateness.push([now, late]);
+      while (s.lateness.length && now - s.lateness[0][0] > 20000) s.lateness.shift();
+      if (s.delay && late > s.delay - LEAD) {
+        const want = Math.min(MAX_DELAY, Math.round((late + LEAD + MARGIN) / 50) * 50);
+        if (want > s.delay) { setStreamDelay(s, want); s.raisedAt = now; total.delayUps++; }
       }
     }
 
+    function tuneDelay(s) {
+      if (s.lateness.length < 60) return;
+      const sorted = s.lateness.map((x) => x[1]).sort((a, b) => a - b);
+      const p99 = sorted[Math.floor(sorted.length * 0.99)];
+      const need = Math.max(AUTO_MIN, Math.min(MAX_DELAY, Math.round((p99 + LEAD + MARGIN) / 10) * 10));
+      const now = performance.now();
+      if (need > s.delay) { setStreamDelay(s, need); s.raisedAt = now; total.delayUps++; }
+      else if (need < s.delay - 100 && now - s.raisedAt > 15000) { setStreamDelay(s, Math.max(need, s.delay - 20)); s.raisedAt = now - 13000; }
+    }
+
+    function setStreamDelay(s, ms) {
+      if (ms === s.delay) { tellSender(s); return; }
+      s.delay = ms;
+      // Shown frames come later (or sooner) from now on: relearn the quickest.
+      s.best = Infinity; s.recentBest = Infinity; s.bestAt = performance.now();
+      release(s);
+      tellSender(s);
+    }
+
+    // The sender gets the delay in 500 ms steps (rounded down): each change of
+    // step resizes its encoder's buffer.
+    function tellSender(s) {
+      const step = s.delay >= 500 ? Math.floor(s.delay / 500) * 500 : s.delay;
+      if (step === s.told) return;
+      s.told = step;
+      send({ type: 'engine-delay', stream: s.number, ms: step });
+    }
+
     function streamsInfo() {
-      return [...streams.values()].map((s) => ({ number: s.number, id: s.config && String(s.config.id), target: s.target, delay: s.delay }));
+      return [...streams.values()].map((s) => ({ number: s.number, id: s.config && String(s.config.id), target: s.target, delay: s.delay, auto: s.auto }));
     }
 
     return { onControl, stop, setTargetDelay, setDelay, streamsInfo, stats: () => ({ ...st, ...total }) };

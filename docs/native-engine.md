@@ -30,7 +30,11 @@ streaming moves to native code.
   textures through an `IMFDXGIDeviceManager`. AV1 where the card has it (RTX 40,
   RX 7000, Arc), otherwise HEVC or H.264. Low-latency mode, CBR-ish, no B-frames,
   periodic intra refresh plus keyframes on request.
-- **Stream delay** (viewer setting, 1.5 s by default, or live): the viewer holds
+- **Stream delay** (viewer setting: automatic by default, live, or 1 to 2 s): the
+  automatic delay notes how late each frame arrives and covers 99% of it plus a
+  margin (0.4 to 3 s). A frame that misses its moment raises it at once; after
+  15 calm seconds it comes down 20 ms every 2 s. The sender's ladder waits twice
+  as long before giving up resolution while viewers are 1 s or more behind. The viewer holds
   frames, still compressed, until shortly before they're due, and the stream's
   sound waits as long (`jitterBufferTarget`). Stalls on the line and resends are
   absorbed instead of freezing the picture. The viewer tells the sender
