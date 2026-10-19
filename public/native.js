@@ -51,7 +51,10 @@ const Native = {
     this.level = settings.adaptive && Specs.info ? Math.max(this.ceiling, Specs.info.start) : this.ceiling;
     this.bad = 0; this.good = 0; this.slow = 0; this.holdUp = false; this.changedAt = performance.now(); this.upAt = 0;
     const level = LEVELS[this.level];
-    const cap = VIDEO_BITRATE[settings.videoQuality] || 20e6;
+    // The native engine goes higher on the default "High" (35 instead of 20 Mbps):
+    // 1440p60 game footage still gains visibly there, and congestion control keeps
+    // the stream to what the line really carries.
+    const cap = settings.videoQuality === 'veryhigh' ? 35e6 : VIDEO_BITRATE[settings.videoQuality] || 20e6;
     const startRate = Math.min(cap, level.mbps * 1.5e6);
     const ready = new Promise((resolve) => {
       this.readyWaiter = resolve;
@@ -218,6 +221,7 @@ function engineReceiver(peer) {
       send: (m) => sendTo(peer, m),
       onTrack: (track, cfg) => attachEngineTrack(peer, String(cfg.id), track),
       onEnd: (cfg) => detachEngineTrack(peer, String(cfg.id)),
+      enhance: () => settings.enhance,
     });
   }
   return peer.engineRx;

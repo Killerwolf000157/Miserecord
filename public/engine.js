@@ -322,10 +322,10 @@ const Engine = (() => {
   // ---------------------------------------------------------------- receiver
   // Rebuilds frames from packets, decodes them on the GPU and outputs a normal
   // video track. onTrack(track, config) when a stream starts, onEnd(config) when it ends.
-  function createReceiver({ dc, send, onTrack, onEnd }) {
+  function createReceiver({ dc, send, onTrack, onEnd, enhance = () => false }) {
     const streams = new Map(); // stream number -> state
     const st = { frames: 0, lost: 0, decoded: 0, late: 0, shown: 0 };
-    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0 };
+    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0, enhanced: 0, enhanceMs: 0 };
 
     function askKey(s) {
       const now = performance.now();
@@ -424,7 +424,27 @@ const Engine = (() => {
         const item = s.queue.shift();
         // Two frames due at once (the timer ran late): show only the newer one.
         if (s.queue.length && s.queue[0].due <= now + 2) { item.frame.close(); continue; }
-        s.writer.write(item.frame).catch(() => item.frame.close());
+        let out = item.frame;
+        // Sharpen (and upscale to the screen, when the stream is smaller): enhance.js.
+        if (enhance() && !s.enhanceFailed && typeof Enhance !== 'undefined') {
+          try {
+            s.enhancer ||= Enhance.create();
+            if (s.enhancer) {
+              const t0 = performance.now();
+              const [ow, oh] = Enhance.outputSize(out.displayWidth, out.displayHeight);
+              const sharp = s.enhancer.process(out, ow, oh);
+              total.enhanceMs += performance.now() - t0;
+              total.enhanced++;
+              out.close();
+              out = sharp;
+            }
+          } catch (err) {
+            Log.warn('engine', 'stream enhancement failed, showing frames as they are', err);
+            s.enhanceFailed = true;
+          }
+        }
+        const shownFrame = out;
+        s.writer.write(shownFrame).catch(() => shownFrame.close());
         st.shown++;
         // How even the pace is: intervals between shown frames, for Stream info and tests.
         if (s.lastShown) { const gap = now - s.lastShown; total.gapN++; total.gapSum += gap; total.gapSq += gap * gap; total.gapMax = Math.max(total.gapMax, gap); }
