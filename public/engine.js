@@ -121,6 +121,18 @@ const Engine = (() => {
       askKey(); // a new viewer can only start on a keyframe
     }
 
+    // How a viewer shows the stream (app.js onStreamView): hidden pauses them;
+    // looking again resumes on a fresh keyframe.
+    function setView(id, view) {
+      const v = viewers.get(id);
+      if (!v) return;
+      const paused = !!(view && view.hidden);
+      if (paused === !!v.paused) return;
+      v.paused = paused;
+      if (!paused) { v.needKey = true; v.calm = 0; askKey(); }
+      applyRate();
+    }
+
     function removeViewer(id) {
       viewers.delete(id);
       delayChanged();
@@ -171,6 +183,8 @@ const Engine = (() => {
       let built = null;
       for (const v of viewers.values()) {
         if (v.dc.readyState !== 'open') continue;
+        // A viewer whose window is minimized gets nothing until they look again.
+        if (v.paused) { v.needKey = true; continue; }
         // A viewer whose line is full (queued here or in the channel) skips frames
         // until the next keyframe, instead of falling further behind.
         if (v.queued + v.dc.bufferedAmount > skipAt(v)) { v.needKey = true; st.skipped++; askKey(); continue; }
@@ -186,7 +200,10 @@ const Engine = (() => {
     // The stream goes at the slowest viewer's rate.
     function applyRate() {
       if (!viewers.size) return;
-      const slowest = Math.min(...[...viewers.values()].map((x) => x.rate));
+      // Paused viewers (window minimized) don't hold the others back.
+      const active = [...viewers.values()].filter((x) => !x.paused);
+      if (!active.length) return;
+      const slowest = Math.min(...active.map((x) => x.rate));
       const now = performance.now();
       if (Math.abs(slowest - rate) / rate > 0.05 && now - lastRateAt > 250) {
         rate = slowest;
@@ -262,7 +279,7 @@ const Engine = (() => {
       return Math.max(0, ...[...viewers.values()].map((v) => v.dc.bufferedAmount + v.queued));
     }
 
-    return { addViewer, removeViewer, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
+    return { addViewer, removeViewer, setView, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
   }
 
   // ---------------------------------------------------------------- WebCodecs sender (tests)

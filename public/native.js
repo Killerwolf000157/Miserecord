@@ -103,6 +103,16 @@ const Native = {
       return;
     }
     this.fanout.addViewer(peer, peer.engineDc);
+    // They may have said how they show it before the share reached them.
+    const view = peer.views && peer.views.get(this.streamId);
+    if (view) this.fanout.setView(peer.id, view);
+  },
+
+  // A viewer's view report (app.js onStreamView). Hidden viewers are paused;
+  // a small view still gets the full picture until there's a second, small
+  // encode to give them.
+  setView(peer, view) {
+    if (this.fanout) this.fanout.setView(peer.id, view);
   },
 
   removeViewer(peer) {

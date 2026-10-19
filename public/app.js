@@ -1315,6 +1315,9 @@ function onDataMessage(peer, msg) {
       peer.remoteMeta.set(msg.id, { kind: msg.kind, label: String(msg.label || '') });
       if (peer.remote.has(msg.id)) renderRemoteStream(peer, msg.id);
       break;
+    case 'stream-view':
+      onStreamView(peer, msg);
+      break;
     case 'stream-end':
       peer.remoteMeta.delete(msg.id);
       removeRemoteStream(peer, msg.id);
@@ -1847,6 +1850,7 @@ function renderRemoteStream(peer, id) {
     addTileVolume(tile, entry);
     tile.video.play().catch(() => {});
     entry.tile = tile;
+    watchView(peer, id, entry);
   }
   entry.tile.setTitle(title);
   entry.tile.el.classList.toggle('audio-only', !hasVideo);
@@ -1862,12 +1866,90 @@ function removeRemoteStream(peer, id) {
     entry.audio = null;
     refreshPeerMeter(peer);
   }
+  if (entry.viewObserver) entry.viewObserver.disconnect();
+  clearTimeout(entry.viewTimer);
   if (entry.tile) {
     Playback.unroute(entry.tile.video);
     if (state.focusTile === entry.tile.el) exitFocus();
     removeTile(entry.tile.el);
   }
   updateStageLayout();
+}
+
+// ---------- how big each stream is shown here, told to whoever sends it ----------
+// The sender uploads a stream once per viewer, so it sends each viewer only what
+// they can see: a small tile gets a small, cheap picture, a minimized window
+// none at all, full screen or a big tile the full one. The size is the
+// picture's real size on screen in physical pixels (a big tile on a 1440p
+// monitor counts as big). Growing is reported at once; shrinking after 1.5 s,
+// so resizing or a quick toggle doesn't flip the quality back and forth.
+const VIEW_STEP = 90; // px: sizes are rounded so small wobbles aren't reported
+function watchView(peer, id, entry) {
+  const report = () => reportView(peer, id, entry);
+  entry.viewObserver = new ResizeObserver(report);
+  entry.viewObserver.observe(entry.tile.video);
+  entry.tile.video.addEventListener('resize', report); // the picture's own size changed
+  // Zoom changes how many pixels are needed without changing the tile.
+  new MutationObserver(report).observe(entry.tile.el, { attributes: true, attributeFilter: ['class'] });
+  report();
+}
+
+function viewOf(entry) {
+  const video = entry.tile.video;
+  if (document.hidden) return { w: 0, h: 0, hidden: true };
+  const dpr = window.devicePixelRatio || 1;
+  const box = video.getBoundingClientRect();
+  let w = box.width * dpr, h = box.height * dpr;
+  // The picture fits inside the box (letterboxed): its own shape decides.
+  if (video.videoWidth && video.videoHeight && w && h) {
+    const ratio = video.videoWidth / video.videoHeight;
+    if (w / h > ratio) w = h * ratio; else h = w / ratio;
+  }
+  if (w < 2 || h < 2) return { w: 0, h: 0, hidden: true };
+  // Zoomed in: the full picture is needed.
+  if (entry.tile.el.classList.contains('zoomed')) return { w: 0, h: 0, full: true };
+  const round = (v) => Math.max(VIEW_STEP, Math.ceil(v / VIEW_STEP) * VIEW_STEP);
+  return { w: round(w), h: round(h) };
+}
+
+function reportView(peer, id, entry) {
+  if (!entry.tile) return;
+  const view = viewOf(entry);
+  const last = entry.view;
+  if (last && last.w === view.w && last.h === view.h && !!last.hidden === !!view.hidden && !!last.full === !!view.full) {
+    clearTimeout(entry.viewTimer);
+    entry.viewTimer = null;
+    return;
+  }
+  const bigger = !last || view.full || (last.hidden && !view.hidden) || (!last.full && view.h > last.h);
+  const send = () => {
+    entry.viewTimer = null;
+    entry.view = view;
+    sendTo(peer, { type: 'stream-view', id, ...view });
+  };
+  clearTimeout(entry.viewTimer);
+  if (bigger) send();
+  else entry.viewTimer = setTimeout(send, 1500);
+}
+
+function reportAllViews() {
+  for (const peer of state.peers.values()) {
+    for (const [id, entry] of peer.remote) if (entry.tile) reportView(peer, id, entry);
+  }
+}
+document.addEventListener('visibilitychange', reportAllViews);
+document.addEventListener('fullscreenchange', reportAllViews);
+
+// Sender side: a viewer said how they show one of your streams.
+function onStreamView(peer, msg) {
+  const id = String(msg.id || '');
+  const num = (v) => Math.max(0, Math.min(16384, Number(v) || 0));
+  const view = { w: num(msg.w), h: num(msg.h), hidden: !!msg.hidden, full: !!msg.full };
+  peer.views ||= new Map();
+  peer.views.set(id, view);
+  Log.info('media', 'viewer shows a stream at', { peer: peer.id.slice(0, 6), size: view.hidden ? 'hidden' : view.full ? 'full' : `${view.w}x${view.h}` });
+  applySendParamsTo(peer);
+  if (Native.streamId === id) Native.setView(peer, view);
 }
 
 function voiceVolumeFor(peer) {

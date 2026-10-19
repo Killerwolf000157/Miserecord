@@ -173,6 +173,27 @@ function motionFor(kind) {
 
 const DEGRADATION = { sharp: 'maintain-resolution', smooth: 'maintain-framerate', balanced: 'balanced' };
 
+// One viewer's picture: the size they show it at (from the source's size, in
+// steps so the encoder isn't restarted for every few pixels), a bitrate shrunk
+// with the area, at most 30 fps once it's a thumbnail, and nothing at all while
+// their window is minimized. A viewer that never said (older version) gets
+// everything, as before.
+function applyViewTo(enc, track, view, fullBitrate) {
+  enc.active = !(view && view.hidden);
+  if (!view || view.hidden || view.full || !view.h) {
+    enc.scaleResolutionDownBy = 1;
+    return;
+  }
+  const src = track.getSettings ? track.getSettings() : {};
+  const srcH = src.height || 1080;
+  const scale = Math.max(1, Math.round((srcH / Math.max(180, view.h)) * 4) / 4);
+  enc.scaleResolutionDownBy = scale;
+  if (scale > 1) {
+    enc.maxBitrate = Math.max(250e3, Math.round(fullBitrate / (scale * scale)));
+    if (view.h <= 400) enc.maxFramerate = Math.min(enc.maxFramerate || 30, 30);
+  }
+}
+
 // Bitrate caps and how video degrades are set per sender, live.
 async function applySendParams() {
   for (const peer of state.peers.values()) await applySendParamsTo(peer);
@@ -196,6 +217,10 @@ async function applySendParamsTo(peer) {
       if (bitrate) enc0.maxBitrate = bitrate;
       else delete enc0.maxBitrate;
       if (kind === 'screen') enc0.maxFramerate = Adapt.fps();
+      // How this viewer shows the stream (app.js onStreamView): smaller, cheaper
+      // or paused for them alone.
+      const stream = (kind === 'screen' || kind === 'media') && state[kind] && state[kind].stream;
+      applyViewTo(enc0, track, peer.views && stream ? peer.views.get(stream.id) : null, bitrate || 2.5e6);
       const motion = motionFor(kind);
       // "detail" puts the encoder in its slides-and-text mode: sharp, but it drops
       // frames hard on fast motion (a game fell to 3 fps). Only "Keep it sharp" uses it.
