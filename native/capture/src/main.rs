@@ -7,10 +7,13 @@
 //                      [--seconds N] [--out FILE]
 //       streams encoded frames to stdout (or FILE), each as a 20-byte header
 //       (u32 length, u8 flags: 1 = keyframe, u8 codec: 1 = H.264, 2 = AV1,
-//       u16 width, u16 height, u16 0, u64 capture time in microseconds, all
-//       little-endian) and the payload (Annex B for H.264, OBUs for AV1).
+//       u16 width, u16 height, u8 layer (0 = main, 1 = small), u8 0, u64 capture
+//       time in microseconds, all little-endian) and the payload (Annex B for
+//       H.264, OBUs for AV1).
 //       stdin takes lines: "key", "bitrate N", "size W H FPS" (a new stream size
-//       and frame rate, live), "quit".
+//       and frame rate, live), "buffer MS", "quit"; and for the small layer (a
+//       second, small encode of the same capture for viewers who show the stream
+//       small): "low W H FPS BITRATE", "low off", "lowkey", "lowbitrate N".
 //       stderr gets one JSON line per event: ready, stats (every second), error.
 //
 // See docs/native-engine.md.
@@ -36,6 +39,33 @@ use gpu::Sendable;
 
 // NV12 textures between capture and encoder; the encoder keeps a few in flight.
 const RING: usize = 8;
+const LOW_RING: usize = 4;
+
+// The small layer's side of the capture callback: its converter, free textures
+// and schedule (it usually runs at a lower frame rate than the main layer).
+struct LowShared {
+    converter: convert::Converter,
+    free: VecDeque<usize>,
+    tx: mpsc::Sender<(usize, i64)>,
+    interval: i64,
+    due: i64,
+}
+
+// The small layer's side of the main loop.
+struct LowLayer {
+    encoder: Encoder,
+    rx: mpsc::Receiver<(usize, i64)>,
+    inflight: VecDeque<usize>,
+    width: u32,
+    height: u32,
+    encoded: u64,
+    bytes: u64,
+}
+
+enum LowCmd {
+    On(u32, u32, u32, u32),
+    Off,
+}
 
 struct Args {
     probe: bool,
@@ -344,6 +374,7 @@ fn run() -> windows::core::Result<()> {
     let captured = Arc::new(AtomicU64::new(0));
     let dropped = Arc::new(AtomicU64::new(0));
     let interval = Arc::new(AtomicI64::new(10_000_000 / args.fps as i64)); // 100 ns units
+    let low_shared: Arc<Mutex<Sendable<Option<LowShared>>>> = Arc::new(Mutex::new(Sendable(None)));
 
     {
         let converter = converter.clone();
@@ -352,7 +383,22 @@ fn run() -> windows::core::Result<()> {
         let dropped = dropped.clone();
         let mut due: i64 = i64::MIN / 2;
         let interval = interval.clone();
+        let low_shared = low_shared.clone();
         let on_frame = move |texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, time: i64, w: u32, h: u32| {
+            // The small layer keeps its own schedule and textures, so a busy main
+            // encoder doesn't starve it (nor the other way round).
+            if let Some(low) = low_shared.lock().unwrap().0.as_mut() {
+                if time >= low.due - low.interval / 4 {
+                    low.due = (low.due + low.interval).max(time);
+                    if let Some(slot) = low.free.pop_front() {
+                        if low.converter.convert(texture, w.min(cw), h.min(ch), slot).is_ok() {
+                            let _ = low.tx.send((slot, time));
+                        } else {
+                            low.free.push_back(slot);
+                        }
+                    }
+                }
+            }
             let interval = interval.load(Ordering::Relaxed);
             // A 144 Hz screen hands over more frames than the stream needs. Frames come
             // with some jitter, so keep a schedule instead of a strict minimum gap.
@@ -399,8 +445,12 @@ fn run() -> windows::core::Result<()> {
     let new_rate = Arc::new(AtomicU32::new(0));
     let new_size: Arc<Mutex<Option<(u32, u32, u32)>>> = Arc::new(Mutex::new(None));
     let new_buffer = Arc::new(AtomicU32::new(u32::MAX));
+    let low_cmd: Arc<Mutex<Option<LowCmd>>> = Arc::new(Mutex::new(None));
+    let low_key = Arc::new(AtomicBool::new(false));
+    let low_rate = Arc::new(AtomicU32::new(0));
     {
         let (quit, want_key, new_rate, new_size, new_buffer) = (quit.clone(), want_key.clone(), new_rate.clone(), new_size.clone(), new_buffer.clone());
+        let (low_cmd, low_key, low_rate) = (low_cmd.clone(), low_key.clone(), low_rate.clone());
         std::thread::spawn(move || {
             for line in std::io::stdin().lock().lines() {
                 let Ok(line) = line else { break };
@@ -419,6 +469,19 @@ fn run() -> windows::core::Result<()> {
                             *new_size.lock().unwrap() = Some((n[0], n[1], n[2].min(240)));
                         }
                     }
+                    Some("low") => {
+                        let rest: Vec<&str> = parts.collect();
+                        if rest.first() == Some(&"off") {
+                            *low_cmd.lock().unwrap() = Some(LowCmd::Off);
+                        } else {
+                            let n: Vec<u32> = rest.iter().filter_map(|v| v.parse().ok()).collect();
+                            if n.len() == 4 && n[0] >= 160 && n[1] >= 90 && n[2] >= 1 && n[3] >= 50_000 {
+                                *low_cmd.lock().unwrap() = Some(LowCmd::On(n[0], n[1], n[2].min(120), n[3]));
+                            }
+                        }
+                    }
+                    Some("lowkey") => low_key.store(true, Ordering::Relaxed),
+                    Some("lowbitrate") => low_rate.store(parts.next().and_then(|v| v.parse().ok()).unwrap_or(0), Ordering::Relaxed),
                     Some("quit") => break,
                     _ => {}
                 }
@@ -442,6 +505,9 @@ fn run() -> windows::core::Result<()> {
     let (mut encoded, mut bytes, mut keys) = (0u64, 0u64, 0u64);
     let mut last_stats = Instant::now();
     let (mut last_cap, mut last_enc, mut last_bytes, mut last_drop) = (0u64, 0u64, 0u64, 0u64);
+    let mut low: Option<LowLayer> = None;
+    let mut low_frames = Vec::new();
+    let (mut last_low_enc, mut last_low_bytes) = (0u64, 0u64);
 
     while !quit.load(Ordering::Relaxed) && (args.seconds == 0 || started.elapsed() < Duration::from_secs(args.seconds)) {
         encoder.poll(&mut frames)?;
@@ -471,6 +537,82 @@ fn run() -> windows::core::Result<()> {
         }
         if want_key.swap(false, Ordering::Relaxed) {
             encoder.force_keyframe();
+        }
+
+        // The small layer: start, change or stop it on request, then feed and drain it.
+        let cmd = low_cmd.lock().unwrap().take();
+        if let Some(cmd) = cmd {
+            low_shared.lock().unwrap().0 = None;
+            if let Some(mut l) = low.take() {
+                l.encoder.finish();
+            }
+            if let LowCmd::On(w, h, f, rate) = cmd {
+                let (lw, lh) = fit(w, h);
+                let made = match Encoder::new(&gpu, encoder.codec, lw, lh, f, rate, false, 0) {
+                    Ok(Some(e)) => convert::Converter::new(&gpu, cw, ch, lw, lh, LOW_RING).map(|c| (e, c)).ok(),
+                    _ => None,
+                };
+                match made {
+                    Some((e, c)) => {
+                        let (ltx, lrx) = mpsc::channel::<(usize, i64)>();
+                        low_shared.lock().unwrap().0 = Some(LowShared { converter: c, free: (0..LOW_RING).collect(), tx: ltx, interval: 10_000_000 / f as i64, due: i64::MIN / 2 });
+                        low = Some(LowLayer { encoder: e, rx: lrx, inflight: VecDeque::new(), width: lw, height: lh, encoded: 0, bytes: 0 });
+                        last_low_enc = 0;
+                        last_low_bytes = 0;
+                        event(format!("{{\"event\":\"low\",\"on\":true,\"width\":{},\"height\":{},\"fps\":{}}}", lw, lh, f));
+                    }
+                    None => event("{\"event\":\"low\",\"on\":false,\"reason\":\"no second encoder\"}".into()),
+                }
+            } else {
+                event("{\"event\":\"low\",\"on\":false}".into());
+            }
+        }
+        if let Some(l) = low.as_mut() {
+            if low_key.swap(false, Ordering::Relaxed) {
+                l.encoder.force_keyframe();
+            }
+            let r = low_rate.swap(0, Ordering::Relaxed);
+            if r > 0 {
+                l.encoder.set_bitrate(r);
+            }
+            l.encoder.poll(&mut low_frames)?;
+            for f in low_frames.drain(..) {
+                if let Some(slot) = l.inflight.pop_front() {
+                    if let Some(s) = low_shared.lock().unwrap().0.as_mut() {
+                        s.free.push_back(slot);
+                    }
+                }
+                let t0 = *first_time.get_or_insert(f.time);
+                let mut header = [0u8; 20];
+                header[0..4].copy_from_slice(&(f.data.len() as u32).to_le_bytes());
+                header[4] = f.key as u8;
+                header[5] = l.encoder.codec.id();
+                header[6..8].copy_from_slice(&(l.width as u16).to_le_bytes());
+                header[8..10].copy_from_slice(&(l.height as u16).to_le_bytes());
+                header[10] = 1; // the small layer
+                header[12..20].copy_from_slice(&(((f.time - t0).max(0) / 10) as u64).to_le_bytes());
+                if out.write_all(&header).and_then(|_| out.write_all(&f.data)).and_then(|_| out.flush()).is_err() {
+                    return Ok(());
+                }
+                l.encoded += 1;
+                l.bytes += f.data.len() as u64;
+            }
+            if l.encoder.wants_input() {
+                if let Ok((slot, time)) = l.rx.try_recv() {
+                    let texture = low_shared.lock().unwrap().0.as_ref().map(|s| s.converter.targets[slot].clone());
+                    if let Some(texture) = texture {
+                        l.encoder.push(&texture, time)?;
+                        l.inflight.push_back(slot);
+                        while l.inflight.len() > LOW_RING - 1 {
+                            if let Some(s) = l.inflight.pop_front() {
+                                if let Some(sh) = low_shared.lock().unwrap().0.as_mut() {
+                                    sh.free.push_back(s);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         let r = new_rate.swap(0, Ordering::Relaxed);
         if r > 0 {
@@ -553,7 +695,7 @@ fn run() -> windows::core::Result<()> {
                 }
             }
             event(format!(
-                "{{\"event\":\"stats\",\"captureFps\":{:.0},\"encodeFps\":{:.0},\"mbps\":{:.1},\"dropped\":{},\"busyDrops\":{:.0},\"keyframes\":{},\"encodeMs\":{:.1},\"inFlight\":{}}}",
+                "{{\"event\":\"stats\",\"captureFps\":{:.0},\"encodeFps\":{:.0},\"mbps\":{:.1},\"dropped\":{},\"busyDrops\":{:.0},\"keyframes\":{},\"encodeMs\":{:.1},\"inFlight\":{},\"lowFps\":{:.0},\"lowMbps\":{:.2}}}",
                 (cap - last_cap) as f64 / secs,
                 (encoded - last_enc) as f64 / secs,
                 (bytes - last_bytes) as f64 * 8.0 / secs / 1e6,
@@ -561,8 +703,14 @@ fn run() -> windows::core::Result<()> {
                 (dropped.load(Ordering::Relaxed) - last_drop) as f64 / secs,
                 keys,
                 if delay_n > 0 { delay_sum / delay_n as f64 } else { 0.0 },
-                inflight.len()
+                inflight.len(),
+                low.as_ref().map(|l| (l.encoded - last_low_enc) as f64 / secs).unwrap_or(0.0),
+                low.as_ref().map(|l| (l.bytes - last_low_bytes) as f64 * 8.0 / secs / 1e6).unwrap_or(0.0)
             ));
+            if let Some(l) = low.as_ref() {
+                last_low_enc = l.encoded;
+                last_low_bytes = l.bytes;
+            }
             delay_sum = 0.0;
             delay_n = 0;
             last_cap = cap;
@@ -573,6 +721,9 @@ fn run() -> windows::core::Result<()> {
         }
     }
     encoder.finish();
+    if let Some(mut l) = low.take() {
+        l.encoder.finish();
+    }
     let _ = out.flush();
     Ok(())
 }

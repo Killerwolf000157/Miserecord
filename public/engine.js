@@ -93,29 +93,34 @@ const Engine = (() => {
   }
 
   // ---------------------------------------------------------------- fan-out sender
-  // One encoded stream (the native helper's) to every viewer.
+  // The native helper's stream to every viewer. It can come in two layers: the
+  // main one, and a small one (a second, small encode) for viewers who show the
+  // stream small. Each viewer gets one layer; a switch happens on the new
+  // layer's next keyframe, so the picture never breaks. Frame numbers are
+  // counted per viewer (the receiver needs them without gaps).
   //   config: { id (MediaStream id), codec, width, height }
   //   sendTo(peer, json): the call's normal channel
-  //   setRate(bps), wantKey(): back to the encoder
-  function createFanout({ number = 1, config, startRate, maxRate, minRate = 500e3, sendTo, setRate, wantKey, onDelay = () => {} }) {
-    const viewers = new Map(); // peer id -> { peer, dc, rate, needKey, frames }
-    let frameNo = 0;
+  //   setRate(bps), setLowRate(bps), wantKey(layer): back to the encoder
+  function createFanout({ number = 1, config, startRate, maxRate, minRate = 500e3, sendTo, setRate, setLowRate = () => {}, wantKey, onDelay = () => {} }) {
+    const viewers = new Map(); // peer id -> { peer, dc, rate, needKey, layer, target, next, ... }
     let rate = startRate;
     let lastRateAt = 0;
-    let lastKeyAsk = 0;
     let lastKeyAt = 0;
-    const st = { frames: 0, bytes: 0, keyframes: 0, skipped: 0 };
+    let lowWant = 0;     // what the small layer should spend (Native picks it from its size)
+    let lowRate = 0;
+    const lastKeyAsk = [0, 0];
+    const st = { frames: 0, bytes: 0, keyframes: 0, skipped: 0, lowFrames: 0, lowBytes: 0 };
 
-    const askKey = () => {
+    const askKey = (layer = 0) => {
       const now = performance.now();
-      if (now - lastKeyAsk < 500) return;
-      lastKeyAsk = now;
-      wantKey();
+      if (now - lastKeyAsk[layer] < 500) return;
+      lastKeyAsk[layer] = now;
+      wantKey(layer);
     };
 
     function addViewer(peer, dc) {
       if (viewers.has(peer.id)) return;
-      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true, queue: [], queued: 0, sentWin: 0, lastBuffered: 0, lastBacklog: 0, tput: 0, calm: 0, full: 0, delay: 0 });
+      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true, layer: 0, target: 0, next: 0, queue: [], queued: 0, sentWin: 0, lastBuffered: 0, lastBacklog: 0, tput: 0, calm: 0, full: 0, delay: 0 });
       delayChanged();
       sendTo(peer, { type: 'engine-config', stream: number, ...config });
       askKey(); // a new viewer can only start on a keyframe
@@ -129,7 +134,22 @@ const Engine = (() => {
       const paused = !!(view && view.hidden);
       if (paused === !!v.paused) return;
       v.paused = paused;
-      if (!paused) { v.needKey = true; v.calm = 0; askKey(); }
+      if (!paused) { v.needKey = true; v.calm = 0; askKey(v.target); }
+      applyRate();
+    }
+
+    // Which layer a viewer should get (Native.chooseLayers). They keep the one
+    // they have until the new one's keyframe.
+    function setLayer(id, layer) {
+      const v = viewers.get(id);
+      if (!v || v.target === layer) return;
+      v.target = layer;
+      if (v.layer !== layer) askKey(layer);
+      applyRate();
+    }
+
+    function setLowWant(bps) {
+      lowWant = bps;
       applyRate();
     }
 
@@ -179,36 +199,64 @@ const Engine = (() => {
 
     function push(frame) {
       const data = frame.data instanceof Uint8Array ? frame.data : new Uint8Array(frame.data);
-      if (frame.key) { st.keyframes++; lastKeyAt = performance.now(); }
+      const layer = frame.layer ? 1 : 0;
+      if (frame.key && !layer) { st.keyframes++; lastKeyAt = performance.now(); }
       let built = null;
+      let sent = false;
       for (const v of viewers.values()) {
         if (v.dc.readyState !== 'open') continue;
         // A viewer whose window is minimized gets nothing until they look again.
         if (v.paused) { v.needKey = true; continue; }
+        if (layer !== v.layer) {
+          // Moving to this layer: from its next keyframe on.
+          if (layer !== v.target || !frame.key) continue;
+          v.layer = layer;
+          v.needKey = false;
+        }
         // A viewer whose line is full (queued here or in the channel) skips frames
         // until the next keyframe, instead of falling further behind.
-        if (v.queued + v.dc.bufferedAmount > skipAt(v)) { v.needKey = true; st.skipped++; askKey(); continue; }
+        if (v.queued + v.dc.bufferedAmount > skipAt(v)) { v.needKey = true; st.skipped++; askKey(layer); continue; }
         if (v.needKey && !frame.key) continue;
         v.needKey = false;
-        built ||= packets(number, frameNo, frame.key, frame.time, data);
-        for (const p of built) { v.queue.push(p); v.queued += p.byteLength; }
+        built ||= packets(number, 0, frame.key, frame.time, data);
+        for (const p of built) {
+          const own = built.length && viewers.size === 1 ? p : p.slice();
+          new DataView(own.buffer, own.byteOffset, own.byteLength).setUint32(4, v.next);
+          v.queue.push(own);
+          v.queued += own.byteLength;
+        }
+        v.next = (v.next + 1) >>> 0;
+        sent = true;
       }
-      if (built) { frameNo = (frameNo + 1) >>> 0; st.frames++; st.bytes += data.byteLength; }
+      if (sent) {
+        if (layer) { st.lowFrames++; st.lowBytes += data.byteLength; } else { st.frames++; st.bytes += data.byteLength; }
+      }
       if (!pacing) { pacing = true; lastPace = performance.now(); pace(); }
     }
 
-    // The stream goes at the slowest viewer's rate.
+    // Each layer goes at the rate of the slowest viewer on it: a slow viewer on
+    // the small layer no longer holds back everyone on the main one. Paused
+    // viewers (window minimized) hold back nobody.
     function applyRate() {
       if (!viewers.size) return;
-      // Paused viewers (window minimized) don't hold the others back.
       const active = [...viewers.values()].filter((x) => !x.paused);
-      if (!active.length) return;
-      const slowest = Math.min(...active.map((x) => x.rate));
+      const main = active.filter((x) => x.target === 0);
       const now = performance.now();
-      if (Math.abs(slowest - rate) / rate > 0.05 && now - lastRateAt > 250) {
-        rate = slowest;
-        lastRateAt = now;
-        setRate(Math.round(rate));
+      if (main.length) {
+        const slowest = Math.min(...main.map((x) => x.rate));
+        if (Math.abs(slowest - rate) / rate > 0.05 && now - lastRateAt > 250) {
+          rate = slowest;
+          lastRateAt = now;
+          setRate(Math.round(rate));
+        }
+      }
+      const low = active.filter((x) => x.target === 1);
+      if (low.length && lowWant) {
+        const next = Math.max(150e3, Math.min(lowWant, ...low.map((x) => x.rate)));
+        if (!lowRate || Math.abs(next - lowRate) / lowRate > 0.1) {
+          lowRate = next;
+          setLowRate(Math.round(lowRate));
+        }
       }
     }
 
@@ -256,7 +304,7 @@ const Engine = (() => {
     function onControl(peer, msg) {
       const v = viewers.get(peer.id);
       if (!v) return;
-      if (msg.type === 'engine-keyframe') { v.needKey = true; askKey(); }
+      if (msg.type === 'engine-keyframe') { v.needKey = true; askKey(v.layer); }
       if (msg.type === 'engine-delay') { v.delay = Math.max(0, Math.min(3000, msg.ms | 0)); delayChanged(); }
       if (msg.type !== 'engine-feedback') return;
       // The viewer's decoder falling behind is a reason to slow down too.
@@ -279,7 +327,7 @@ const Engine = (() => {
       return Math.max(0, ...[...viewers.values()].map((v) => v.dc.bufferedAmount + v.queued));
     }
 
-    return { addViewer, removeViewer, setView, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
+    return { addViewer, removeViewer, setView, setLayer, setLowWant, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
   }
 
   // ---------------------------------------------------------------- WebCodecs sender (tests)

@@ -92,6 +92,7 @@ function start(webContents, opts) {
         width: buf.readUInt16LE(6),
         height: buf.readUInt16LE(8),
         time: Number(buf.readBigUInt64LE(12)),
+        layer: buf[10], // 0 = main, 1 = the small layer
         data: buf.subarray(HEADER, HEADER + len),
       });
       buf = buf.subarray(HEADER + len);

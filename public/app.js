@@ -1914,6 +1914,10 @@ function viewOf(entry) {
 
 function reportView(peer, id, entry) {
   if (!entry.tile) return;
+  // Before its first frame a video element has the browser's default size
+  // (300x150), which would look like a small view. Its "resize" event reports
+  // once the picture is in.
+  if (!entry.tile.video.videoWidth && !document.hidden) return;
   const view = viewOf(entry);
   const last = entry.view;
   if (last && last.w === view.w && last.h === view.h && !!last.hidden === !!view.hidden && !!last.full === !!view.full) {

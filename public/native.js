@@ -4,6 +4,13 @@
 // its codec. Otherwise the share uses WebRTC exactly as before.
 'use strict';
 
+// The small layer's sizes (Native.chooseLayers), with what each spends.
+const LOW_SIZES = [
+  { w: 640, h: 360, mbps: 0.6 },
+  { w: 960, h: 540, mbps: 1.2 },
+  { w: 1280, h: 720, mbps: 2 },
+];
+
 const Native = {
   caps: null,      // { adapter, codecs } from the helper's probe
   fanout: null,    // the running share's sender
@@ -74,7 +81,8 @@ const Native = {
       maxRate: cap,
       sendTo,
       setRate: (bps) => desk.engineControl(`bitrate ${bps}`),
-      wantKey: () => desk.engineControl('key'),
+      setLowRate: (bps) => desk.engineControl(`lowbitrate ${bps}`),
+      wantKey: (layer) => desk.engineControl(layer ? 'lowkey' : 'key'),
       // Every viewer waits this long anyway: the encoder may spread bits over it.
       // Settled for a second first: a viewer joining says its delay right after, and
       // each change restarts the encoder.
@@ -82,7 +90,6 @@ const Native = {
       // viewer's automatic delay often dips and comes back.
       onDelay: (ms) => {
         clearTimeout(this.delayTimer);
-    this.bufferMs = 0;
         const up = ms > (this.bufferMs || 0);
         this.delayTimer = setTimeout(() => {
           this.bufferMs = ms;
@@ -91,6 +98,7 @@ const Native = {
         }, up ? 1000 : 10000);
       },
     });
+    this.low = null; this.lowOn = null; this.lowFailed = false;
     for (const peer of state.peers.values()) this.addViewer(peer);
     Log.info('engine', 'native share started', { codec: info.codec, encoder: info.encoder, size: `${info.width}x${info.height}`, capture: info.capture, priority: info.priority, copy: info.copy });
     return true;
@@ -106,20 +114,73 @@ const Native = {
     // They may have said how they show it before the share reached them.
     const view = peer.views && peer.views.get(this.streamId);
     if (view) this.fanout.setView(peer.id, view);
+    this.chooseLayers();
   },
 
   // A viewer's view report (app.js onStreamView). Hidden viewers are paused;
-  // a small view still gets the full picture until there's a second, small
-  // encode to give them.
+  // viewers who show the stream small get the small layer.
   setView(peer, view) {
-    if (this.fanout) this.fanout.setView(peer.id, view);
+    if (!this.fanout) return;
+    this.fanout.setView(peer.id, view);
+    this.chooseLayers();
   },
 
   removeViewer(peer) {
-    if (this.fanout) this.fanout.removeViewer(peer.id);
+    if (!this.fanout) return;
+    this.fanout.removeViewer(peer.id);
+    this.chooseLayers();
+  },
+
+  // The small layer: one second encode, as big as the largest small view needs
+  // (360p, 540p or 720p at 30 fps), for every viewer who shows the stream at
+  // most 60% of the main layer's height. It runs only while someone needs it,
+  // and stops 10 s after the last one. If the graphics card can't run a second
+  // encode, everyone stays on the main layer, as before.
+  chooseLayers() {
+    if (!this.fanout || !this.info) return;
+    const mainH = this.info.height;
+    const small = [];
+    for (const peer of state.peers.values()) {
+      const view = peer.views && peer.views.get(this.streamId);
+      if (view && !view.hidden && !view.full && view.h > 0 && view.h <= mainH * 0.6) small.push({ peer, h: view.h });
+    }
+    const need = small.length ? Math.max(...small.map((x) => x.h)) : 0;
+    const size = need ? LOW_SIZES.find((s) => s.h >= need) || LOW_SIZES[LOW_SIZES.length - 1] : null;
+    const useful = size && !this.lowFailed && size.h <= mainH * 0.75;
+    const desk = window.miserecordDesktop;
+    if (useful) {
+      clearTimeout(this.lowOffTimer);
+      this.lowOffTimer = null;
+      if (!this.low || this.low.h !== size.h) {
+        this.low = size;
+        this.lowOn = null;
+        const fps = Math.min(30, this.info.fps);
+        desk.engineControl(`low ${size.w} ${size.h} ${fps} ${Math.round(size.mbps * 1e6)}`);
+        this.fanout.setLowWant(size.mbps * 1e6);
+        Log.info('engine', 'small layer', { size: `${size.h}p`, viewers: small.length });
+      }
+    } else if (this.low && !this.lowOffTimer) {
+      this.lowOffTimer = setTimeout(() => {
+        this.lowOffTimer = null;
+        if (!this.fanout) return;
+        this.low = null;
+        this.lowOn = null;
+        desk.engineControl('low off');
+        Log.info('engine', 'small layer off');
+      }, 10000);
+    }
+    const ready = useful && this.lowOn === size.h;
+    for (const peer of state.peers.values()) {
+      const isSmall = small.some((x) => x.peer === peer);
+      this.fanout.setLayer(peer.id, ready && isSmall ? 1 : 0);
+    }
   },
 
   stop() {
+    clearTimeout(this.lowOffTimer);
+    this.lowOffTimer = null;
+    this.low = null;
+    this.lowOn = null;
     if (this.fanout) this.fanout.stop();
     this.fanout = null;
     this.info = null;
@@ -181,9 +242,16 @@ const Native = {
 
   onEvent(ev) {
     if (ev.event === 'ready' && this.readyWaiter) { this.readyWaiter(ev); return; }
+    if (ev.event === 'low' && this.fanout) {
+      if (ev.on) this.lowOn = this.low ? this.low.h : null; // the helper answers commands in order
+      else if (ev.reason) { this.lowFailed = true; this.low = null; Log.warn('engine', 'no small layer', ev.reason); }
+      this.chooseLayers();
+      return;
+    }
     if (ev.event === 'resized' && this.fanout && this.info) {
       Object.assign(this.info, { width: ev.width, height: ev.height, fps: ev.fps });
       this.fanout.reconfigure({ width: ev.width, height: ev.height });
+      this.chooseLayers(); // the line between small and big moved
       return;
     }
     if (ev.event === 'stats' && this.fanout && this.info) {

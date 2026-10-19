@@ -30,6 +30,15 @@ streaming moves to native code.
   textures through an `IMFDXGIDeviceManager`. AV1 where the card has it (RTX 40,
   RX 7000, Arc), otherwise HEVC or H.264. Low-latency mode, CBR-ish, no B-frames,
   periodic intra refresh plus keyframes on request.
+- **Per-viewer quality**: viewers report how big they show each stream
+  (`stream-view`: the picture's size in physical pixels, full when zoomed,
+  hidden when minimized). A hidden viewer gets nothing. Viewers who show the
+  stream at most 60% of its height get the **small layer**: a second encode of
+  the same capture in the helper (`low W H FPS BITRATE`, 360p/540p/720p at
+  30 fps, 0.6/1.2/2 Mbps), started only while someone needs it and stopped 10 s
+  after. A viewer moves between layers on the new layer's keyframe; frame
+  numbers are counted per viewer; each layer's rate follows only its own
+  viewers. Frames carry their layer in header byte 10.
 - **Stream delay** (viewer setting: automatic by default, live, or 1 to 2 s): the
   automatic delay notes how late each frame arrives and covers 99% of it plus a
   margin (0.4 to 3 s). A frame that misses its moment raises it at once; after
