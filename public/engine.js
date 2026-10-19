@@ -324,7 +324,7 @@ const Engine = (() => {
   // video track. onTrack(track, config) when a stream starts, onEnd(config) when it ends.
   function createReceiver({ dc, send, onTrack, onEnd }) {
     const streams = new Map(); // stream number -> state
-    const st = { frames: 0, lost: 0, decoded: 0 };
+    const st = { frames: 0, lost: 0, decoded: 0, late: 0 };
     const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0 };
 
     function askKey(s) {
@@ -340,7 +340,7 @@ const Engine = (() => {
       let s = streams.get(number);
       if (!s) {
         const generator = new MediaStreamTrackGenerator({ kind: 'video' });
-        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), needKey: true, lastKeyAsk: 0 };
+        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now() };
         streams.set(number, s);
         s.config = msg;
         onTrack(generator, msg);
@@ -353,7 +353,20 @@ const Engine = (() => {
       s.started = true;
       if (s.decoder && s.decoder.state !== 'closed') s.decoder.close();
       s.decoder = new VideoDecoder({
-        output: (frame) => { st.decoded++; s.writer.write(frame).catch(() => frame.close()); },
+        output: (frame) => {
+          st.decoded++;
+          // Late frames (they piled up somewhere and arrived in a burst) are skipped
+          // so the picture jumps back to live instead of playing in fast-forward.
+          // "Late" is against the best delay seen recently: the two computers'
+          // clocks differ, but that difference is constant.
+          const now = performance.now();
+          const delay = now - frame.timestamp / 1000;
+          if (now - s.bestAt > 3000) { s.best = s.recentBest; s.recentBest = Infinity; s.bestAt = now; }
+          s.recentBest = Math.min(s.recentBest, delay);
+          s.best = Math.min(s.best, delay);
+          if (delay - s.best > 300) { st.late++; frame.close(); return; }
+          s.writer.write(frame).catch(() => frame.close());
+        },
         error: (err) => { Log.warn('engine', 'decoder error', err); s.needKey = true; askKey(s); open(s.config); },
       });
       s.decoder.configure({ codec: CODECS[msg.codec] || CODECS.H264, codedWidth: msg.width, codedHeight: msg.height, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true });
