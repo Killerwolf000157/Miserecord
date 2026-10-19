@@ -15,6 +15,7 @@
 // See docs/native-engine.md.
 mod capture;
 mod convert;
+mod cursor;
 mod dup;
 mod encode;
 mod gpu;
