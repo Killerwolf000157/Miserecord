@@ -138,6 +138,9 @@
       <button type="button" class="chip-btn" id="lobbyCopyChip" title="Copy lobby code" aria-label="Copy lobby code">
         <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
       </button>
+      <button type="button" class="chip-btn" id="lobbyFriendsChip" title="Invite a friend" aria-label="Invite a friend" hidden>
+        <svg viewBox="0 0 24 24"><circle cx="10" cy="8" r="3.5"/><path d="M3.5 19a6.5 6.5 0 0 1 13 0M18.5 8v6M15.5 11h6"/></svg>
+      </button>
       <button type="button" class="chip-btn" id="lobbyLock" title="Lock the lobby" aria-label="Lock the lobby" hidden>
         <svg class="unlocked" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 7.7-1.5"/></svg>
         <svg class="locked" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
@@ -195,6 +198,10 @@
           <button type="button" class="btn pill" id="lobbyCopyBig">
             <svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg>
             Copy code
+          </button>
+          <button type="button" class="btn pill" id="lobbyFriendsBig" hidden>
+            <svg viewBox="0 0 24 24"><circle cx="10" cy="8" r="3.5"/><path d="M3.5 19a6.5 6.5 0 0 1 13 0M18.5 8v6M15.5 11h6"/></svg>
+            Invite a friend
           </button>
         </div>
         <div class="call-meta"><span id="callTimer" class="timer"></span></div>
@@ -354,8 +361,9 @@
         <div class="group">
           <div class="row"><span class="row-label" id="sFriendCount"></span>
             <button type="button" class="btn small danger-text" id="sForget">Remove all</button></div>
+          <label class="row"><span class="row-label">Let friends see when I'm online</span><input type="checkbox" class="switch" id="sShowOnline"></label>
         </div>
-        <p class="group-note">Friends and your key are kept only on this computer. Removing them means swapping codes again.</p>
+        <p class="group-note">Friends and your key are kept only on this computer. Removing them means swapping codes again. Your online status goes only to your saved friends, encrypted, about once a minute.</p>
 
         <div id="sAbout" hidden>
           <h3 class="group-title">Running in the background</h3>
@@ -363,6 +371,18 @@
             <label class="row"><span class="row-label">Keep running when closed</span><input type="checkbox" class="switch" id="sBackground"></label>
             <label class="row"><span class="row-label">Start with Windows</span><input type="checkbox" class="switch" id="sAutostart"></label>
           </div>
+          <h3 class="group-title">In-game overlay</h3>
+          <div class="group">
+            <label class="row"><span class="row-label">Show who's talking over games</span><input type="checkbox" class="switch" id="sOverlay"></label>
+            <label class="row"><span class="row-label">Corner</span>
+              <select id="sOverlayCorner">
+                <option value="top-left">Top left</option>
+                <option value="top-right">Top right</option>
+                <option value="bottom-left">Bottom left</option>
+                <option value="bottom-right">Bottom right</option>
+              </select></label>
+          </div>
+          <p class="group-note">During calls, while Miserecord isn't in front. It never shows in your screen share. Works over windowed and borderless full-screen games.</p>
           <p class="group-note" id="sBackgroundNote">Friends can only call you while Miserecord is running. Closing the window keeps it in the tray, near the clock. Starting with Windows opens it hidden there.</p>
           <h3 class="group-title">App</h3>
           <div class="group">
@@ -674,6 +694,7 @@
 <script src="engine.js"></script>
 <script src="native.js"></script>
 <script src="sounds.js"></script>
+<script src="social.js"></script>
 <script src="app.js"></script>
 <script src="desktop.js"></script>
 <script src="select.js"></script>

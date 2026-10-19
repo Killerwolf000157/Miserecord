@@ -489,6 +489,9 @@ function initSettings() {
   bindSwitch('#sEnhance', 'enhance');
   bindSelect('#sStreamDelay', 'streamDelay');
   bindSwitch('#sHideFromShare', 'hideFromShare');
+  bindSwitch('#sShowOnline', 'showOnline');
+  bindSwitch('#sOverlay', 'overlay');
+  bindSelect('#sOverlayCorner', 'overlayCorner');
   const codecs = supportedVideoCodecs();
   $('#sCodec').innerHTML = '';
   $('#sCodec').append(new Option('Automatic', 'auto'));
@@ -554,6 +557,9 @@ function openSettings() {
   $('#sEnhance').checked = settings.enhance;
   $('#sStreamDelay').value = settings.streamDelay;
   $('#sHideFromShare').checked = settings.hideFromShare;
+  $('#sShowOnline').checked = settings.showOnline;
+  $('#sOverlay').checked = settings.overlay;
+  $('#sOverlayCorner').value = settings.overlayCorner;
   $('#sHideRow').hidden = !window.miserecordDesktop;
   $('#sEngine').closest('.row').hidden = !(Native.caps && (Native.caps.codecs || []).length);
   syncSpecs();

@@ -13,7 +13,7 @@
 'use strict';
 
 const {
-  app, BrowserWindow, Menu, Notification, Tray, desktopCapturer, ipcMain, nativeImage, nativeTheme, net, protocol, session, shell,
+  app, BrowserWindow, Menu, Notification, Tray, desktopCapturer, ipcMain, nativeImage, nativeTheme, net, protocol, screen, session, shell,
 } = require('electron');
 const fs = require('fs');
 const os = require('os');
@@ -70,6 +70,7 @@ const MAIN_FR = {
   'Miserecord is still running': 'Miserecord est toujours lancé',
   'Friends can still call you. Quit from the tray icon, or turn this off in Settings.': 'Tes amis peuvent toujours t’appeler. Quitte depuis l’icône près de l’horloge, ou désactive ça dans les Réglages.',
   '{0} is calling': '{0} t’appelle',
+  '{0} invites you to their lobby': '{0} t’invite dans son salon',
   'Click to open Miserecord and answer.': 'Clique pour ouvrir Miserecord et répondre.',
 };
 const tr = (s, arg) => ((language === 'fr' && MAIN_FR[s]) || s).replace('{0}', arg);
@@ -192,7 +193,8 @@ function start() {
     if (OWN_TITLE_BAR && mainWindow && !mainWindow.isDestroyed()) mainWindow.setTitleBarOverlay(titleBarColors(!!dark));
   });
   ipcMain.handle('uninstall', (_e, opts) => uninstall(!!(opts && opts.deleteData)));
-  ipcMain.on('incoming-call', (_e, name) => notifyIncoming(String(name || 'Your friend').slice(0, 32)));
+  ipcMain.on('incoming-call', (_e, name, kind) => notifyIncoming(String(name || 'Your friend').slice(0, 32), kind === 'invite'));
+  ipcMain.on('overlay', (_e, data) => setOverlay(data));
   ipcMain.on('call-answered', () => {
     if (mainWindow) mainWindow.flashFrame(false);
     if (callNotification) callNotification.close();
@@ -237,6 +239,8 @@ function createWindow() {
     });
   }
   mainWindow.once('ready-to-show', () => { if (!START_HIDDEN) mainWindow.show(); });
+  // The overlay steps aside while Miserecord itself is in front.
+  for (const ev of ['focus', 'blur', 'show', 'hide', 'minimize', 'restore']) mainWindow.on(ev, () => updateOverlay());
   mainWindow.loadURL(`${APP_ORIGIN}/`);
 
   // Closing the window keeps Miserecord running in the tray, unless turned off.
@@ -441,15 +445,69 @@ async function systemInfo() {
 // ---------------------------------------------------------------- incoming calls
 let callNotification = null;
 
-function notifyIncoming(name) {
+function notifyIncoming(name, invite = false) {
   if (!mainWindow) return;
   const visible = mainWindow.isVisible() && mainWindow.isFocused();
   if (mainWindow.isVisible() && !mainWindow.isFocused()) mainWindow.flashFrame(true);
   if (visible || !Notification.isSupported()) return;
   if (callNotification) callNotification.close();
-  callNotification = new Notification({ title: tr('{0} is calling', name), body: tr('Click to open Miserecord and answer.'), silent: true });
+  callNotification = new Notification({ title: tr(invite ? '{0} invites you to their lobby' : '{0} is calling', name), body: tr('Click to open Miserecord and answer.'), silent: true });
   callNotification.on('click', showWindow);
   callNotification.show();
+}
+
+// ---------------------------------------------------------------- in-game overlay
+// A small always-on-top panel with the people in the call and who's talking, so
+// you can see it over a game. Click-through, never focused, left out of screen
+// captures (it won't show up in your stream), and hidden while Miserecord itself
+// is in front. Shows over windowed and borderless games; exclusive full screen
+// draws over everything. MR_NO_OVERLAY=1 keeps it off (test runs).
+let overlayWindow = null;
+let overlayData = null;
+
+function createOverlay() {
+  const win = new BrowserWindow({
+    width: 240, height: 40, show: false, frame: false, transparent: true, resizable: false, movable: false,
+    focusable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false, backgroundColor: '#00000000',
+    webPreferences: { preload: path.join(__dirname, 'overlay-preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false, backgroundThrottling: false },
+  });
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.setIgnoreMouseEvents(true);
+  win.setContentProtection(true);
+  win.removeMenu();
+  win.loadURL(`${APP_ORIGIN}/overlay.html`);
+  win.webContents.once('did-finish-load', () => { if (overlayData) win.webContents.send('overlay-data', overlayData); });
+  win.on('closed', () => { overlayWindow = null; });
+  return win;
+}
+
+function setOverlay(data) {
+  if (process.env.MR_NO_OVERLAY) return;
+  const people = data && Array.isArray(data.people) ? data.people.slice(0, 12).map((p) => ({
+    name: String((p && p.name) || '').slice(0, 32), me: !!(p && p.me), speaking: !!(p && p.speaking), muted: !!(p && p.muted), deafened: !!(p && p.deafened),
+  })) : [];
+  const corner = ['top-left', 'top-right', 'bottom-left', 'bottom-right'].includes(data && data.corner) ? data.corner : 'top-left';
+  overlayData = people.length ? { corner, people } : null;
+  updateOverlay();
+}
+
+function updateOverlay() {
+  const show = !!overlayData && !(mainWindow && mainWindow.isVisible() && mainWindow.isFocused());
+  if (!show) {
+    if (overlayWindow) overlayWindow.hide();
+    return;
+  }
+  if (!overlayWindow) overlayWindow = createOverlay();
+  const area = screen.getPrimaryDisplay().bounds;
+  const height = 12 + overlayData.people.length * 34;
+  const width = 240;
+  const right = overlayData.corner.endsWith('right');
+  const bottom = overlayData.corner.startsWith('bottom');
+  const x = right ? area.x + area.width - width - 12 : area.x + 12;
+  const y = bottom ? area.y + area.height - height - 60 : area.y + 48;
+  overlayWindow.setBounds({ x, y, width, height });
+  overlayWindow.webContents.send('overlay-data', overlayData);
+  if (!overlayWindow.isVisible()) overlayWindow.showInactive();
 }
 
 // ---------------------------------------------------------------- global hotkeys

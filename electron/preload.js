@@ -51,7 +51,8 @@ contextBridge.exposeInMainWorld('miserecordDesktop', {
   setBusy: (busy) => ipcRenderer.send('busy', !!busy), // in a call or connecting
 
   // Calls
-  incomingCall: (name) => ipcRenderer.send('incoming-call', String(name || '')),
+  incomingCall: (name, kind) => ipcRenderer.send('incoming-call', String(name || ''), kind === 'invite' ? 'invite' : 'call'),
+  setOverlay: (data) => ipcRenderer.send('overlay', data), // in-game overlay: who's in the call (social.js)
   callAnswered: () => ipcRenderer.send('call-answered'),
 
   // Background mode and starting with Windows

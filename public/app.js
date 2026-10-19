@@ -63,7 +63,7 @@ function initJoin() {
   $('#joinLobbyBtn').onclick = () => joinLobby($('#lobbyInput').value);
   $('#lobbyInput').onkeydown = (e) => { if (e.key === 'Enter') joinLobby($('#lobbyInput').value); };
   $('#cancelRing').onclick = leave;
-  $('#acceptBtn').onclick = () => state.ringIn && acceptCall(state.ringIn.friend, state.ringIn.sid);
+  $('#acceptBtn').onclick = () => state.ringIn && (state.ringIn.code ? acceptInvite() : acceptCall(state.ringIn.friend, state.ringIn.sid));
   $('#declineBtn').onclick = declineCall;
   $('#name').focus();
   startListening();
@@ -114,6 +114,7 @@ function showScreen(id) {
   for (const s of ['join', 'connect', 'ringing', 'call']) $(`#${s}`).hidden = s !== id;
   // The desktop app only installs an update by itself when you're not in a call.
   if (window.miserecordDesktop && window.miserecordDesktop.setBusy) window.miserecordDesktop.setBusy(id !== 'join');
+  Social.statusChanged();
 }
 
 function inCall() {
@@ -150,6 +151,7 @@ function startListening() {
 }
 
 function onRelayStatus(open) {
+  Social.onRelays(open);
   $('#relayStatus').className = `status ${open ? 'ok' : 'wait'}`;
   $('#relayText').textContent = open ? 'Ready for calls' : 'Connecting to relays';
 }
@@ -177,7 +179,9 @@ function onRelayMessage(channel, msg) {
 // Saved friends: call again without codes (1:1)
 // ===================================================================
 function renderFriends() {
-  const list = Rendezvous.friends();
+  // Online friends first, then those in a call, then everyone else.
+  const rank = (f) => { const p = Social.presence.get(f.id); return p ? (p.status === 'online' ? 0 : 1) : 2; };
+  const list = Rendezvous.friends().sort((a, b) => rank(a) - rank(b));
   const any = list.length > 0;
   $('#friendsSection').hidden = !any;
   $('#addTitle').hidden = !any;
@@ -199,7 +203,11 @@ function renderFriends() {
       </button>`;
     row.querySelector('.f-avatar').textContent = initial(f.name);
     row.querySelector('.f-name').textContent = f.name;
-    row.querySelector('.f-sub').textContent = `Last call ${sinceText(f.lastCall)}`;
+    // Online status (social.js): a dot on the picture, and the line under the name.
+    const seen = Social.presence.get(f.id);
+    row.classList.toggle('online', !!seen && seen.status === 'online');
+    row.classList.toggle('busy', !!seen && seen.status === 'busy');
+    row.querySelector('.f-sub').textContent = seen ? I18n.t(seen.status === 'busy' ? 'In a call' : 'Online') : `Last call ${sinceText(f.lastCall)}`;
     const remove = row.querySelector('.f-remove');
     remove.title = `Remove ${f.name}`;
     remove.setAttribute('aria-label', `Remove ${f.name}`);
@@ -265,6 +273,7 @@ function friendSender(friend, sid) {
 }
 
 function onFriendMessage(friend, msg) {
+  if (Social.onFriendMessage(friend, msg)) return; // online status and invites
   const s = state.session;
   const mine = s && s.friend.id === friend.id;
   if (msg.type !== 'ring' || !state.ringIn || state.ringIn.sid !== msg.sid) {
@@ -314,23 +323,25 @@ function onFriendMessage(friend, msg) {
   }
 }
 
-function showIncoming(friend, sid) {
+// invite: { code } when a friend asks you into their lobby (social.js).
+function showIncoming(friend, sid, invite = null) {
   if (state.ringIn && state.ringIn.sid === sid) {
     state.ringIn.last = Date.now();
     return;
   }
   hideIncoming();
-  state.ringIn = { friend, sid, last: Date.now() };
-  Log.info('call', 'incoming call', { friend: friend.id.slice(0, 6), sid: sid.slice(0, 6) });
-  $('#incomingTitle').textContent = `${friend.name} is calling`;
+  state.ringIn = { friend, sid, last: Date.now(), code: invite ? invite.code : null };
+  Log.info('call', invite ? 'invited to a lobby' : 'incoming call', { friend: friend.id.slice(0, 6), sid: sid.slice(0, 6) });
+  $('#incomingTitle').textContent = invite ? I18n.t(`${friend.name} invites you to their lobby`) : `${friend.name} is calling`;
+  $('#acceptBtn').textContent = I18n.t(invite ? 'Join' : 'Answer');
   $('#incoming').hidden = false;
   document.title = I18n.t(`${friend.name} is calling · Miserecord`);
-  if (window.miserecordDesktop) window.miserecordDesktop.incomingCall(friend.name);
+  if (window.miserecordDesktop) window.miserecordDesktop.incomingCall(friend.name, invite ? 'invite' : 'call');
   Ringtone.start();
   // The caller re-sends every few seconds; if that stops, they gave up.
   state.ringIn.watch = setInterval(() => {
     if (state.ringIn && Date.now() - state.ringIn.last > 10000) {
-      toast(`Missed call from ${state.ringIn.friend.name}`);
+      toast(state.ringIn.code ? `Missed invite from ${state.ringIn.friend.name}` : `Missed call from ${state.ringIn.friend.name}`);
       hideIncoming();
     }
   }, 2000);
@@ -350,6 +361,15 @@ function declineCall() {
   Log.info('call', 'declined incoming call');
   if (state.pool) state.pool.send(state.ringIn.friend, { type: 'decline', sid: state.ringIn.sid });
   hideIncoming();
+}
+
+// Join the lobby a friend invited you to.
+async function acceptInvite() {
+  const { friend, sid, code } = state.ringIn;
+  Log.info('lobby', 'accepting an invite', { friend: friend.id.slice(0, 6) });
+  hideIncoming();
+  if (state.pool) state.pool.send(friend, { type: 'accept', sid });
+  await joinLobby(code);
 }
 
 // auto: both called each other at once and this side was already set up.
@@ -527,6 +547,9 @@ function renderLobby() {
   }
   $('#lobbyCodeChip').textContent = lobby.code;
   $('#lobbyCodeBig').textContent = lobby.code;
+  const anyFriends = Rendezvous.friends().length > 0;
+  $('#lobbyFriendsChip').hidden = !anyFriends;
+  $('#lobbyFriendsBig').hidden = !anyFriends;
   const isHost = lobby.hostId === state.myId;
   $('#lobbyLock').hidden = !isHost;
   $('#lobbyLock').classList.toggle('on', lobby.locked);
@@ -571,6 +594,8 @@ function initLobby() {
   $('#lobbyCopyChip').onclick = copyLobbyCode;
   $('#lobbyCopyBig').onclick = copyLobbyCode;
   $('#lobbyLock').onclick = () => setLobbyLocked(!state.lobby.locked);
+  $('#lobbyFriendsChip').onclick = (e) => Social.openInviteMenu(e);
+  $('#lobbyFriendsBig').onclick = (e) => Social.openInviteMenu(e);
 }
 
 // ===================================================================
@@ -1001,6 +1026,7 @@ function leave() {
   const s = state.session;
   if (s && !isConnected() && state.pool) state.pool.send(s.friend, { type: 'cancel', sid: s.sid });
   stopRinging();
+  Social.stopInvites();
   state.session = null;
   for (const peer of [...state.peers.values()]) removePeer(peer, 'leaving');
   const lobby = state.lobby;
@@ -1279,6 +1305,7 @@ function onDataMessage(peer, msg) {
       setPeerName(peer, msg.name);
       break;
     case 'mute':
+      peer.muted = !!msg.muted;
       peer.card.querySelector('.micoff').hidden = !msg.muted;
       break;
     case 'chat':
@@ -2148,5 +2175,6 @@ initManual();
 initLobby();
 initChat();
 initControls();
+Social.init();
 initSoundPanel();
 Native.init();

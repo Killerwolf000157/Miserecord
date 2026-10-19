@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Miserecord overlay</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: transparent; overflow: hidden; font: 600 13px/1.2 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; color: #fff; user-select: none; }
+  #list { display: flex; flex-direction: column; gap: 4px; padding: 6px; align-items: flex-start; }
+  body.right #list { align-items: flex-end; }
+  .p { display: flex; align-items: center; gap: 7px; padding: 4px 10px 4px 4px; border-radius: 999px; background: rgba(20, 20, 24, .62); opacity: .72; transition: opacity .12s; }
+  .p.speaking { opacity: 1; }
+  .a { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; background: #3a3a44; box-shadow: 0 0 0 2px transparent; transition: box-shadow .1s; }
+  .p.speaking .a { box-shadow: 0 0 0 2px #30D158; }
+  .n { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 2px rgba(0, 0, 0, .6); }
+  .i { width: 13px; height: 13px; fill: none; stroke: #FF453A; stroke-width: 2.2; stroke-linecap: round; display: none; }
+  .p.muted .mic, .p.deafened .ear { display: block; }
+</style>
+</head>
+<body>
+<div id="list"></div>
+<script src="overlay.js"></script>
+</body>
+</html>

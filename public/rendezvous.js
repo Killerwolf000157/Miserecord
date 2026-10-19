@@ -24,6 +24,8 @@ const Rendezvous = (() => {
 
   const log = (level, msg, data) => { if (typeof Log !== 'undefined') Log[level]('relay', msg, data); };
 
+  // Online-status messages go out every minute: not worth a log line each.
+  const QUIET = new Set(['here', 'who', 'away']);
   const EVENT_KIND = 25050; // ephemeral range (20000–29999): relays don't store it
   const DEFAULT_RELAYS = ['wss://relay.damus.io', 'wss://nos.lol', 'wss://relay.primal.net', 'wss://relay.snort.social'];
 
@@ -333,7 +335,7 @@ const Rendezvous = (() => {
       if (skew === null || Math.abs(skew) > 90) {
         return log('warn', 'dropped a stale message (check both computers\' clocks)', { type: body && body.type, skewSeconds: skew, via: host });
       }
-      log('info', `got ${body.type}`, { via: host, ageSeconds: skew });
+      if (!QUIET.has(body.type)) log('info', `got ${body.type}`, { via: host, ageSeconds: skew });
       this.onMessage(friend, body);
     }
 
@@ -356,6 +358,7 @@ const Rendezvous = (() => {
         if (ws.readyState === WebSocket.OPEN) { ws.send(frame); sent++; }
       }
       // Rings repeat every few seconds; log only the first of each call.
+      if (QUIET.has(body.type)) return sent;
       if (body.type !== 'ring' || !this.loggedRings.has(body.sid)) {
         if (body.type === 'ring') this.loggedRings.add(body.sid);
         log(sent ? 'info' : 'error', `sent ${body.type}${body.type === 'ring' ? ' (repeats every 3 s)' : ''}`, { relays: sent, bytes: frame.length });

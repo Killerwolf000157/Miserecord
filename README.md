@@ -7,7 +7,7 @@ Private calls with your friends, 1:1 or in groups of up to 8, with no server to 
 - **Media file streaming**: play a local video or song live to your friend
 - **Chat and file transfer** of any size, with image previews
 - **Group lobbies**: create a lobby, share its one code, and anyone with it can join (up to 8 people)
-- **Saved friends**: swap codes once, or press **Add friend** on someone in a lobby (they press Accept), then just press **Call** next time
+- **Saved friends**: swap codes once, or press **Add friend** on someone in a lobby (they press Accept), then just press **Call** next time; see which friends are online or in a call, and invite them into the lobby you're in (their app rings, they press Join)
 - **Right-click** a person or a stream for its volume (0-200%), Add friend, Full screen or Remove
 - **Settings** (gear icon): microphone and speaker, echo cancellation and noise suppression,
   voice quality up to Hi-Fi stereo, streamed audio up to 510 kbps, screen-share resolution
@@ -43,6 +43,7 @@ Click **More info → Run anyway**.
 The desktop app adds:
 - an in-app screen picker with full computer sound on Windows, leaving out Miserecord's own sound so friends never hear themselves; while you share a monitor, Miserecord hides itself from the capture (no mirror effect)
 - its own top bar with the real Windows minimize, maximize and close buttons
+- an in-game overlay of who's in the call and who's talking: click-through, never in your stream, over windowed and borderless games
 - running in the tray when you close the window, so friends can still call you, and an
   option to start hidden with Windows (Settings → General)
 - push to talk and shortcuts that work everywhere, even in games
