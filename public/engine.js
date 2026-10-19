@@ -324,8 +324,8 @@ const Engine = (() => {
   // video track. onTrack(track, config) when a stream starts, onEnd(config) when it ends.
   function createReceiver({ dc, send, onTrack, onEnd }) {
     const streams = new Map(); // stream number -> state
-    const st = { frames: 0, lost: 0, decoded: 0, late: 0 };
-    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0 };
+    const st = { frames: 0, lost: 0, decoded: 0, late: 0, shown: 0 };
+    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0 };
 
     function askKey(s) {
       const now = performance.now();
@@ -340,7 +340,7 @@ const Engine = (() => {
       let s = streams.get(number);
       if (!s) {
         const generator = new MediaStreamTrackGenerator({ kind: 'video' });
-        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now() };
+        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now(), queue: [], timer: null, target: 50 };
         streams.set(number, s);
         s.config = msg;
         onTrack(generator, msg);
@@ -365,7 +365,12 @@ const Engine = (() => {
           s.recentBest = Math.min(s.recentBest, delay);
           s.best = Math.min(s.best, delay);
           if (delay - s.best > 300) { st.late++; frame.close(); return; }
-          s.writer.write(frame).catch(() => frame.close());
+          // Playout: show each frame at its capture time plus a small steady delay
+          // (s.target, matched to the stream's sound), so frames that arrive
+          // unevenly still come out at an even pace and in step with the audio.
+          s.queue.push({ frame, due: frame.timestamp / 1000 + s.best + s.target });
+          if (s.queue.length > 30) { s.queue.shift().frame.close(); st.late++; }
+          playout(s);
         },
         error: (err) => { Log.warn('engine', 'decoder error', err); s.needKey = true; askKey(s); open(s.config); },
       });
@@ -412,10 +417,30 @@ const Engine = (() => {
       st.frames = 0; st.lost = 0;
     }, 500);
 
+    function playout(s) {
+      if (s.timer) return;
+      const now = performance.now();
+      while (s.queue.length && s.queue[0].due <= now + 2) {
+        const item = s.queue.shift();
+        // Two frames due at once (the timer ran late): show only the newer one.
+        if (s.queue.length && s.queue[0].due <= now + 2) { item.frame.close(); continue; }
+        s.writer.write(item.frame).catch(() => item.frame.close());
+        st.shown++;
+        // How even the pace is: intervals between shown frames, for Stream info and tests.
+        if (s.lastShown) { const gap = now - s.lastShown; total.gapN++; total.gapSum += gap; total.gapSq += gap * gap; total.gapMax = Math.max(total.gapMax, gap); }
+        s.lastShown = now;
+      }
+      if (s.queue.length) {
+        s.timer = setTimeout(() => { s.timer = null; playout(s); }, Math.max(1, s.queue[0].due - now));
+      }
+    }
+
     function close(number) {
       const s = streams.get(number);
       if (!s) return;
       streams.delete(number);
+      clearTimeout(s.timer);
+      for (const item of s.queue || []) item.frame.close();
       if (s.decoder && s.decoder.state !== 'closed') s.decoder.close();
       s.writer.close().catch(() => {});
       s.generator.stop();
@@ -432,7 +457,17 @@ const Engine = (() => {
       for (const n of [...streams.keys()]) close(n);
     }
 
-    return { onControl, stop, stats: () => ({ ...st, ...total }) };
+    // How long frames wait before they're shown (ms), e.g. to match the sound.
+    function setTargetDelay(number, ms) {
+      const s = streams.get(number);
+      if (s) s.target = Math.max(30, Math.min(400, ms));
+    }
+
+    function streamsInfo() {
+      return [...streams.values()].map((s) => ({ number: s.number, id: s.config && String(s.config.id), target: s.target }));
+    }
+
+    return { onControl, stop, setTargetDelay, streamsInfo, stats: () => ({ ...st, ...total }) };
   }
 
   return { channel, decodable, createFanout, createSender, createReceiver, CODECS };

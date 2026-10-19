@@ -180,6 +180,37 @@ const Native = {
 };
 
 // ---------------------------------------------------------------- viewer side
+// Sound and picture in step: the stream's sound waits in WebRTC's jitter buffer
+// before it plays; native video waits the same time (plus the ~20 ms its own
+// pipeline is quicker), at least 50 ms so frames come out evenly. Every 2 s.
+async function syncEngineStreams() {
+  for (const peer of state.peers.values()) {
+    if (!peer.engineRx || peer.pc.connectionState !== 'connected') continue;
+    const list = peer.engineRx.streamsInfo();
+    if (!list.length) continue;
+    const stats = await peer.pc.getStats().catch(() => null);
+    for (const info of list) {
+      const entry = peer.remote.get(info.id);
+      const audio = entry && entry.stream.getAudioTracks()[0];
+      let target = 50;
+      if (audio && stats) {
+        stats.forEach((r) => {
+          if (r.type !== 'inbound-rtp' || r.kind !== 'audio' || r.trackIdentifier !== audio.id) return;
+          const prev = entry.audioJb;
+          entry.audioJb = { delay: r.jitterBufferDelay, count: r.jitterBufferEmittedCount };
+          if (prev && r.jitterBufferEmittedCount > prev.count) {
+            const ms = ((r.jitterBufferDelay - prev.delay) / (r.jitterBufferEmittedCount - prev.count)) * 1000;
+            target = Math.max(50, ms + 20);
+          } else if (r.jitterBufferEmittedCount) {
+            target = Math.max(50, (r.jitterBufferDelay / r.jitterBufferEmittedCount) * 1000 + 20);
+          }
+        });
+      }
+      peer.engineRx.setTargetDelay(info.number, target);
+    }
+  }
+}
+
 function engineReceiver(peer) {
   if (!peer.engineRx) {
     peer.engineRx = Engine.createReceiver({

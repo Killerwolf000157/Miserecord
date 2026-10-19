@@ -872,6 +872,7 @@ function onConnectionState(peer) {
         if (++state.statsTicks % 5 === 0) logVideoQuality().catch(() => {});
         checkCodecLoad().catch(() => {});
         Adapt.tick().catch((err) => Log.warn('media', 'smart streaming check failed', err));
+        syncEngineStreams().catch(() => {});
         if (document.querySelector('.stream-info')) refreshStreamInfo().catch(() => {});
       }, 2000);
       break;
@@ -1747,6 +1748,13 @@ function onRemoteTrack(peer, e) {
     stream.addEventListener('removetrack', () => {
       if (stream.getTracks().length === 0) removeRemoteStream(peer, stream.id);
     });
+  }
+  const entry = peer.remote.get(stream.id);
+  // A native share's picture can arrive before its sound: the entry then holds
+  // our own stream with the decoded video, and the sound joins it here.
+  if (entry.stream !== stream && !entry.stream.getTracks().includes(e.track)) {
+    entry.stream.addTrack(e.track);
+    if (entry.tile) Playback.route(entry.tile.video, entry.stream);
   }
   renderRemoteStream(peer, stream.id);
 }
