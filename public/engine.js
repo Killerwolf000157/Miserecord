@@ -325,7 +325,7 @@ const Engine = (() => {
   function createReceiver({ dc, send, onTrack, onEnd, enhance = () => false }) {
     const streams = new Map(); // stream number -> state
     const st = { frames: 0, lost: 0, decoded: 0, late: 0, shown: 0 };
-    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0, enhanced: 0, enhanceMs: 0 };
+    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, reordered: 0, stalls: 0, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0, enhanced: 0, enhanceMs: 0 };
 
     function askKey(s) {
       const now = performance.now();
@@ -340,7 +340,7 @@ const Engine = (() => {
       let s = streams.get(number);
       if (!s) {
         const generator = new MediaStreamTrackGenerator({ kind: 'video' });
-        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now(), queue: [], timer: null, target: 50 };
+        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), ready: new Map(), next: null, waitSince: 0, needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now(), queue: [], timer: null, target: 50 };
         streams.set(number, s);
         s.config = msg;
         onTrack(generator, msg);
@@ -372,7 +372,7 @@ const Engine = (() => {
           if (s.queue.length > 30) { s.queue.shift().frame.close(); st.late++; }
           playout(s);
         },
-        error: (err) => { Log.warn('engine', 'decoder error', err); s.needKey = true; askKey(s); open(s.config); },
+        error: (err) => { Log.warn('engine', 'decoder error', err); restart(s); askKey(s); open(s.config); },
       });
       s.decoder.configure({ codec: CODECS[msg.codec] || CODECS.H264, codedWidth: msg.width, codedHeight: msg.height, hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true });
       s.needKey = true;
@@ -384,11 +384,9 @@ const Engine = (() => {
       total.packets++;
       const s = streams.get(p.stream);
       if (!s || !s.decoder) return; // waiting for engine-config
-      // Packets can arrive slightly out of order; a frame still incomplete when one
-      // three frames newer arrives is lost.
-      for (const no of s.parts.keys()) {
-        if (no + 3 <= p.frame) { s.parts.delete(no); st.lost++; total.lost++; s.needKey = true; }
-      }
+      if (s.next !== null && p.frame < s.next) return; // a frame already passed over
+      // Pieces of frames dropped by a restart never complete: don't keep them.
+      if (s.parts.size > 60) for (const k of s.parts.keys()) if (k + 120 < p.frame) s.parts.delete(k);
       let f = s.parts.get(p.frame);
       if (!f) { f = { key: p.key, count: p.count, got: 0, chunks: new Array(p.count), timestamp: p.timestamp }; s.parts.set(p.frame, f); }
       if (f.chunks[p.index]) return;
@@ -398,17 +396,65 @@ const Engine = (() => {
       s.parts.delete(p.frame);
       st.frames++;
       total.complete++;
-      // After a loss, only a keyframe can continue the picture.
-      if (s.needKey && !f.key) { total.waitedForKey++; askKey(s); return; }
-      s.needKey = false;
+      arrived(s, p.frame, f);
+    });
+
+    // The channel is reliable but unordered: when a packet is lost on the way and
+    // sent again, the frames after it can finish first. Each frame needs the one
+    // before it, so frames are decoded strictly in order: a finished frame waits
+    // here until the ones before it are in (a resend takes about one round trip).
+    // For a given viewer the sender only leaves out frames right before a
+    // keyframe, so a gap in front of a normal frame always means "still coming".
+    function arrived(s, no, f) {
+      if (f.key && (s.next === null || no >= s.next)) {
+        // A keyframe needs nothing before it: start over from here.
+        for (const k of s.ready.keys()) if (k < no) s.ready.delete(k);
+        for (const k of s.parts.keys()) if (k < no) s.parts.delete(k);
+        s.needKey = false;
+        s.next = no;
+      }
+      if (s.needKey || s.next === null) { total.waitedForKey++; askKey(s); return; }
+      if (no !== s.next) {
+        s.ready.set(no, f);
+        total.reordered++;
+        if (!s.waitSince) s.waitSince = performance.now();
+        // Nothing came for the missing frame in a second: give up on it.
+        if (performance.now() - s.waitSince > 1000) {
+          st.lost++; total.lost++; total.stalls++;
+          restart(s);
+          askKey(s);
+        }
+        return;
+      }
+      decode(s, f);
+      s.next = no + 1;
+      while (s.ready.has(s.next)) {
+        const g = s.ready.get(s.next);
+        s.ready.delete(s.next);
+        decode(s, g);
+        s.next++;
+      }
+      s.waitSince = s.ready.size ? performance.now() : 0;
+    }
+
+    function decode(s, f) {
       const size = f.chunks.reduce((n, c) => n + c.byteLength, 0);
       const data = new Uint8Array(size);
       let o = 0;
       for (const c of f.chunks) { data.set(c, o); o += c.byteLength; }
       try {
         s.decoder.decode(new EncodedVideoChunk({ type: f.key ? 'key' : 'delta', timestamp: f.timestamp, data }));
-      } catch { s.needKey = true; askKey(s); }
-    });
+      } catch { restart(s); askKey(s); }
+    }
+
+    // Wait for the next keyframe: nothing held so far can be shown without it.
+    function restart(s) {
+      s.needKey = true;
+      s.next = null;
+      s.waitSince = 0;
+      s.ready.clear();
+      s.parts.clear();
+    }
 
     const feedback = setInterval(() => {
       for (const s of streams.values()) {
