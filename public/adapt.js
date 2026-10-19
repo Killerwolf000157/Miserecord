@@ -129,7 +129,7 @@ const Adapt = {
     let upload = Infinity; // Mbps the slowest connection can carry, as WebRTC estimates it
     for (const peer of state.peers.values()) {
       if (peer.pc.connectionState !== 'connected') continue;
-      const stats = await peer.pc.getStats();
+      const stats = await pcStats(peer.pc);
       stats.forEach((r) => {
         if (r.type !== 'transport' || !r.selectedCandidatePairId) return;
         const pair = stats.get(r.selectedCandidatePairId);
@@ -254,7 +254,7 @@ async function refreshStreamInfo() {
           if (!entry.tile || entry.tile.el !== tile) continue;
           send = entry.senderStats || null;
           const trackId = entry.stream.getVideoTracks()[0] && entry.stream.getVideoTracks()[0].id;
-          const stats = await peer.pc.getStats().catch(() => null);
+          const stats = await pcStats(peer.pc).catch(() => null);
           if (stats) stats.forEach((r) => {
             if (r.type !== 'inbound-rtp' || r.kind !== 'video' || (trackId && r.trackIdentifier !== trackId)) return;
             const prev = entry.recvPrev;

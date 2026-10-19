@@ -702,7 +702,7 @@ async function checkCodecLoad() {
   let strained = false;
   for (const peer of state.peers.values()) {
     if (peer.pc.connectionState !== 'connected') continue;
-    const stats = await peer.pc.getStats();
+    const stats = await pcStats(peer.pc);
     stats.forEach((r) => {
       if (r.type !== 'outbound-rtp' || r.kind !== 'video' || !r.frameWidth) return;
       const codec = r.codecId && stats.get(r.codecId);
@@ -741,7 +741,7 @@ async function logVideoQuality() {
   if (!state.screen && !state.media) return;
   for (const peer of state.peers.values()) {
     if (peer.pc.connectionState !== 'connected') continue;
-    const stats = await peer.pc.getStats();
+    const stats = await pcStats(peer.pc);
     let pair = null;
     stats.forEach((r) => { if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId); });
     stats.forEach((r) => {
@@ -782,7 +782,7 @@ async function updateSettingsLive() {
   let inStats = null;
   let sendingTo = 0;
   for (const peer of live) {
-    const stats = await peer.pc.getStats();
+    const stats = await pcStats(peer.pc);
     let sends = false;
     stats.forEach((r) => {
       if (r.kind !== 'video' || !r.frameWidth) return;

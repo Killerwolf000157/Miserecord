@@ -222,7 +222,7 @@ async function syncEngineStreams() {
     peer.engineRx.setDelay(settings.streamDelay === 'auto' ? 'auto' : Math.max(0, Math.min(3000, Number(settings.streamDelay) || 0)));
     const list = peer.engineRx.streamsInfo();
     if (!list.length) continue;
-    const stats = await peer.pc.getStats().catch(() => null);
+    const stats = await pcStats(peer.pc).catch(() => null);
     for (const info of list) {
       const delay = info.delay || 0;
       const entry = peer.remote.get(info.id);

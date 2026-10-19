@@ -67,13 +67,25 @@ function start(webContents, opts) {
   helper = child;
   const send = (channel, payload) => { if (!webContents.isDestroyed()) webContents.send(channel, payload); };
 
-  // stdout: framed encoded video
+  // stdout: framed encoded video. Pieces are only joined once a whole frame is
+  // in (a keyframe arrives in many pipe reads; joining at each read copied it
+  // over and over).
   let buf = Buffer.alloc(0);
+  let pending = [];
+  let pendingLen = 0;
+  let need = HEADER;
   child.stdout.on('data', (chunk) => {
-    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+    pending.push(chunk);
+    pendingLen += chunk.length;
+    if (buf.length + pendingLen < need) return;
+    buf = Buffer.concat(buf.length ? [buf, ...pending] : pending);
+    pending = [];
+    pendingLen = 0;
     while (buf.length >= HEADER) {
       const len = buf.readUInt32LE(0);
-      if (buf.length < HEADER + len) break;
+      need = HEADER + len;
+      if (buf.length < need) break;
+      need = HEADER;
       send('engine-frame', {
         key: buf[4] === 1,
         codec: buf[5] === 2 ? 'AV1' : 'H264',

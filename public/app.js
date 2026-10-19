@@ -942,7 +942,7 @@ async function updateRoute() {
   }
   const details = [];
   for (const peer of connected) {
-    const stats = await peer.pc.getStats();
+    const stats = await pcStats(peer.pc);
     let pair;
     stats.forEach((r) => {
       if (r.type === 'transport' && r.selectedCandidatePairId) pair = stats.get(r.selectedCandidatePairId);
@@ -1590,6 +1590,30 @@ function initControls() {
   $('#hangBtn').onclick = () => { if (state.mode) Sfx.play('hangup'); leave(); };
 }
 
+// Native shares: the browser's own capture was only your tile's preview, and it
+// still grabs full-size frames in the main process (~130 MB at 1440p) to shrink
+// them. Your tile keeps a snapshot instead and that capture closes; the sound
+// (its own capture) and the native stream go on. A share of a window that
+// closes still ends: the helper reports it.
+async function freezePreview(track, el) {
+  try {
+    const frame = await new ImageCapture(track).grabFrame();
+    const w = Math.min(960, frame.width);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = Math.round((frame.height * w) / frame.width);
+    canvas.getContext('2d').drawImage(frame, 0, 0, canvas.width, canvas.height);
+    frame.close();
+    el.poster = canvas.toDataURL('image/jpeg', 0.85);
+  } catch (err) {
+    Log.warn('media', 'no snapshot for the preview', err);
+  }
+  if (!state.screen || state.screen.preview.getVideoTracks()[0] !== track) return; // stopped meanwhile
+  el.srcObject = null;
+  track.stop();
+  Log.info('media', 'preview capture closed, native share goes on');
+}
+
 function toggleMute() {
   if (!state.mic) return;
   state.muted = !state.muted;
@@ -1634,11 +1658,11 @@ async function toggleScreen() {
     native = await Native.start(publishStream.id);
     if (!native) publishStream = stream;
   }
-  if (native) video.applyConstraints({ width: { max: 640 }, height: { max: 360 }, frameRate: { max: 10 } }).catch(() => {});
   state.screen = { stream: publishStream, preview: stream, native, senders: new Map(), label: 'Screen' };
   const tile = makeTile({ title: 'Your screen', remote: false });
   tile.video.muted = true;
   tile.video.srcObject = stream;
+  if (native) freezePreview(video, tile.video);
   state.screen.tile = tile.el;
   addQualityPicker(tile.el);
   publish('screen');
@@ -2057,8 +2081,8 @@ function attachMeter(card, stream) {
   const analyser = state.audioCtx.createAnalyser();
   analyser.fftSize = 512;
   source.connect(analyser);
-  state.meters.set(card, { source, analyser, data: new Uint8Array(analyser.fftSize) });
-  if (state.meters.size === 1) requestAnimationFrame(tickMeters);
+  state.meters.set(card, { source, analyser, data: new Uint8Array(analyser.fftSize), shown: -1 });
+  if (!state.meterTimer) state.meterTimer = setTimeout(tickMeters, 33);
 }
 
 function detachMeter(card) {
@@ -2069,7 +2093,12 @@ function detachMeter(card) {
   card.style.setProperty('--level', 0);
 }
 
+// 30 times a second on a timer, not on every screen frame: that was 144 style
+// updates a second per person on a 144 Hz screen, and screen frames stop while
+// the window is minimized or in the tray, which froze the in-game overlay's
+// "who's talking". A card is only touched when its level visibly changes.
 function tickMeters() {
+  state.meterTimer = null;
   if (!state.meters.size) return;
   for (const [card, m] of state.meters) {
     m.analyser.getByteTimeDomainData(m.data);
@@ -2077,14 +2106,27 @@ function tickMeters() {
     for (const v of m.data) sum += (v - 128) ** 2;
     const rms = Math.sqrt(sum / m.data.length) / 128;
     const muted = card.id === 'meCard' && state.muted;
-    card.style.setProperty('--level', muted ? 0 : Math.min(1, rms * 6).toFixed(3));
+    const level = muted ? 0 : Math.round(Math.min(1, rms * 6) * 50) / 50;
+    if (level !== m.shown) {
+      m.shown = level;
+      card.style.setProperty('--level', level);
+    }
   }
-  requestAnimationFrame(tickMeters);
+  state.meterTimer = setTimeout(tickMeters, 33);
 }
 
 // ===================================================================
 // Helpers
 // ===================================================================
+// One getStats() per connection per moment: the checks of the 2-s tick (route,
+// smart streaming, codec load, sound sync, Stream info) share it instead of
+// each asking the browser for the whole report again.
+function pcStats(pc) {
+  const now = performance.now();
+  if (!pc.statsCache || now - pc.statsCache.at > 500) pc.statsCache = { at: now, report: pc.getStats() };
+  return pc.statsCache.report;
+}
+
 function isConnected() {
   return [...state.peers.values()].some((p) => p.pc.connectionState === 'connected');
 }
