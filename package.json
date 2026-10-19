@@ -15,8 +15,9 @@
   "scripts": {
     "start": "electron .",
     "icon": "node build/make-icon.js",
-    "dist": "electron-builder --win --publish never",
-    "release": "electron-builder --win --publish always"
+    "dist": "npm run native && electron-builder --win --publish never",
+    "release": "npm run native && electron-builder --win --publish always",
+    "native": "cargo build --release --manifest-path native/capture/Cargo.toml"
   },
   "dependencies": {
     "electron-updater": "6.8.9",
@@ -61,6 +62,12 @@
       "owner": "Killerwolf000157",
       "repo": "Miserecord",
       "releaseType": "release"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "native/capture/target/release/miserecord-capture.exe",
+        "to": "miserecord-capture.exe"
+      }
+    ]
   }
 }

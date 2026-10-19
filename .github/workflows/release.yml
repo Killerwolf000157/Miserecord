@@ -32,6 +32,15 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # Rust is preinstalled on GitHub's Windows runners (MSVC toolchain); the
+      # native capture helper is built by "npm run dist" below and copied into
+      # the installer.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            native/capture/target
+          key: cargo-${{ hashFiles('native/capture/Cargo.lock') }}
       # Build only. Publishing from electron-builder uploads files in parallel
       # and can race itself into "release already exists".
       - run: npm run dist
