@@ -115,7 +115,7 @@ const Engine = (() => {
 
     function addViewer(peer, dc) {
       if (viewers.has(peer.id)) return;
-      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true });
+      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true, queue: [], queued: 0 });
       sendTo(peer, { type: 'engine-config', stream: number, ...config });
       askKey(); // a new viewer can only start on a keyframe
     }
@@ -124,20 +124,52 @@ const Engine = (() => {
       viewers.delete(id);
     }
 
+    // Pacing: a keyframe is a few hundred kilobytes; sent in one go it overflows
+    // the other side's network buffer and the connection stalls to recover. Like
+    // WebRTC's own pacer, packets go out at a steady rate a little above the
+    // stream's bitrate instead.
+    const PACE_FACTOR = 3;
+    const MIN_PACE = 20e6;
+    const BURST = 48 * 1024;
+    let budget = BURST;
+    let lastPace = performance.now();
+    let pacing = false;
+
+    function pace() {
+      const now = performance.now();
+      const bps = Math.max(MIN_PACE, rate * PACE_FACTOR);
+      budget = Math.min(BURST, budget + ((now - lastPace) / 1000) * (bps / 8));
+      lastPace = now;
+      let more = false;
+      for (const v of viewers.values()) {
+        while (v.queue.length && budget > 0) {
+          const p = v.queue.shift();
+          v.queued -= p.byteLength;
+          if (v.dc.readyState === 'open') v.dc.send(p);
+          budget -= p.byteLength;
+        }
+        if (v.queue.length) more = true;
+      }
+      pacing = more;
+      if (more) setTimeout(pace, 1);
+    }
+
     function push(frame) {
       const data = frame.data instanceof Uint8Array ? frame.data : new Uint8Array(frame.data);
       if (frame.key) { st.keyframes++; lastKeyAt = performance.now(); }
       let built = null;
       for (const v of viewers.values()) {
         if (v.dc.readyState !== 'open') continue;
-        // A viewer whose line is full skips frames until the next keyframe.
-        if (v.dc.bufferedAmount > 2 * 1024 * 1024) { v.needKey = true; st.skipped++; askKey(); continue; }
+        // A viewer whose line is full (queued here or in the channel) skips frames
+        // until the next keyframe, instead of falling further behind.
+        if (v.queued + v.dc.bufferedAmount > 2 * 1024 * 1024) { v.needKey = true; st.skipped++; askKey(); continue; }
         if (v.needKey && !frame.key) continue;
         v.needKey = false;
         built ||= packets(number, frameNo, frame.key, frame.time, data);
-        for (const p of built) v.dc.send(p);
+        for (const p of built) { v.queue.push(p); v.queued += p.byteLength; }
       }
       if (built) { frameNo = (frameNo + 1) >>> 0; st.frames++; st.bytes += data.byteLength; }
+      if (!pacing) { pacing = true; lastPace = performance.now(); pace(); }
     }
 
     function onControl(peer, msg) {
@@ -145,7 +177,7 @@ const Engine = (() => {
       if (!v) return;
       if (msg.type === 'engine-keyframe') { v.needKey = true; askKey(); }
       if (msg.type !== 'engine-feedback') return;
-      v.rate = rateStep(v.rate, msg, v.dc.bufferedAmount, minRate, maxRate);
+      v.rate = rateStep(v.rate, msg, v.dc.bufferedAmount + v.queued, minRate, maxRate);
       const slowest = Math.min(...[...viewers.values()].map((x) => x.rate));
       const now = performance.now();
       if (Math.abs(slowest - rate) / rate > 0.1 && now - lastRateAt > 500) {
