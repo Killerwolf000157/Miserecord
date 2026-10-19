@@ -137,7 +137,9 @@ impl Encoder {
                     (&CODECAPI_AVEncCommonMaxBitRate, VARIANT::from(bitrate), "max bitrate"),
                     // Half a second of buffer: steady enough for the line, small enough for low delay.
                     (&CODECAPI_AVEncCommonBufferSize, VARIANT::from(bitrate / 2), "buffer"),
-                    (&CODECAPI_AVEncMPVGOPSize, VARIANT::from(fps * 4), "gop"),
+                    // A keyframe every 10 s: on a slow upload each one is a hiccup, and lost
+                    // pictures are healed by keyframes on request anyway.
+                    (&CODECAPI_AVEncMPVGOPSize, VARIANT::from(fps * 10), "gop"),
                     (&CODECAPI_AVEncMPVDefaultBPictureCount, VARIANT::from(0u32), "no b-frames"),
                     // Speed over squeezing every bit.
                     (&CODECAPI_AVEncCommonQualityVsSpeed, VARIANT::from(speed), "speed"),

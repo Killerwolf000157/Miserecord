@@ -7,6 +7,7 @@
   if (!desk) return;
   document.documentElement.classList.add('desktop');
   Log.info('app', 'running as desktop app');
+  if (desk.setHideFromShare) desk.setHideFromShare(settings.hideFromShare);
 
   // ---------------------------------------------------------------- window buttons
   // Minimize, maximize and close follow the app's light or dark theme.

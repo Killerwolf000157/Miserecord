@@ -46,7 +46,11 @@ const Native = {
     const codec = this.pickCodec();
     if (!codec) return false;
     const desk = window.miserecordDesktop;
-    const level = LEVELS[ceilingLevel()];
+    // Start where this computer can (the specs scan), never above Settings.
+    this.ceiling = ceilingLevel();
+    this.level = settings.adaptive && Specs.info ? Math.max(this.ceiling, Specs.info.start) : this.ceiling;
+    this.bad = 0; this.good = 0; this.slow = 0; this.holdUp = false; this.changedAt = performance.now(); this.upAt = 0;
+    const level = LEVELS[this.level];
     const cap = VIDEO_BITRATE[settings.videoQuality] || 20e6;
     const startRate = Math.min(cap, level.mbps * 1.5e6);
     const ready = new Promise((resolve) => {
@@ -96,9 +100,53 @@ const Native = {
     if (desk && desk.engineStop) desk.engineStop();
   },
 
+  // The ladder (LEVELS in adapt.js), once a second from the helper's numbers:
+  // down a level when the line only carries 60% of what this size needs (the
+  // congestion control has already lowered the bitrate to what gets through),
+  // or when the encoder can't keep up; up again after 15 s with room for the
+  // next level. Changes are 6 s apart, and a level that failed right after
+  // going up isn't tried again during this share.
+  adapt(ev) {
+    if (!settings.adaptive || this.level == null) return;
+    const now = performance.now();
+    const rate = this.fanout.stats().rate;
+    const fps = LEVELS[this.level].fps;
+    const need = LEVELS[this.level].mbps * 1e6;
+    const starved = rate < need * 0.6;
+    const slowEncoder = ev.captureFps >= fps * 0.8 && ev.encodeFps < fps * 0.75;
+    this.diagnosis = starved ? 'bandwidth' : slowEncoder ? 'encoder' : ev.encodeFps >= fps * 0.85 ? 'ok' : 'still';
+    this.bad = starved ? this.bad + 1 : 0;
+    this.slow = slowEncoder ? this.slow + 1 : 0;
+    const roomUp = this.level > this.ceiling && rate >= LEVELS[this.level - 1].mbps * 1e6 * 1.25;
+    this.good = !starved && !slowEncoder && roomUp ? this.good + 1 : 0;
+    if (now - this.changedAt < 6000) return;
+    if ((this.bad >= 3 || this.slow >= 4) && this.level < LEVELS.length - 1) {
+      if (this.upAt && now - this.upAt < 20000) this.holdUp = true;
+      this.setLevel(this.level + 1, this.bad >= 3 ? `only ${(rate / 1e6).toFixed(1)} Mbps gets through` : 'the encoder is behind');
+    } else if (this.good >= 15 && !this.holdUp) {
+      this.upAt = now;
+      this.setLevel(this.level - 1, 'room for more');
+    }
+  },
+
+  setLevel(i, why) {
+    this.level = i;
+    this.bad = 0; this.good = 0; this.slow = 0;
+    this.changedAt = performance.now();
+    const l = LEVELS[i];
+    Log.info('engine', `native stream ${levelName(i)}`, why);
+    window.miserecordDesktop.engineControl(`size ${Math.round((l.h * 16) / 9)} ${l.h} ${l.fps}`);
+  },
+
   onEvent(ev) {
     if (ev.event === 'ready' && this.readyWaiter) { this.readyWaiter(ev); return; }
+    if (ev.event === 'resized' && this.fanout && this.info) {
+      Object.assign(this.info, { width: ev.width, height: ev.height, fps: ev.fps });
+      this.fanout.reconfigure({ width: ev.width, height: ev.height });
+      return;
+    }
     if (ev.event === 'stats' && this.fanout && this.info) {
+      this.adapt(ev);
       const f = this.fanout.stats();
       const want = this.info.fps;
       // What viewers see in Stream info, as for a WebRTC share.
@@ -108,10 +156,10 @@ const Native = {
         sent: ev.encodeFps,
         codec: this.info.codec,
         gpu: true,
-        auto: true,
-        level: `${this.info.height}p ${want} fps`,
+        auto: !!settings.adaptive,
+        level: levelName(this.level),
         upload: Math.round(f.rate / 1e5) / 10,
-        diagnosis: ev.encodeFps >= want * 0.85 ? 'ok' : ev.captureFps < want * 0.6 ? 'still' : 'encoder',
+        diagnosis: this.diagnosis || 'ok',
         engine: `${this.info.encoder} · ${this.info.capture}`,
       };
       broadcast({ type: 'stream-stats', id: this.streamId, stats: state.sendStats });

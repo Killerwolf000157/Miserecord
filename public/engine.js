@@ -97,7 +97,7 @@ const Engine = (() => {
   //   config: { id (MediaStream id), codec, width, height }
   //   sendTo(peer, json): the call's normal channel
   //   setRate(bps), wantKey(): back to the encoder
-  function createFanout({ number = 1, config, startRate, maxRate, minRate = 800e3, sendTo, setRate, wantKey }) {
+  function createFanout({ number = 1, config, startRate, maxRate, minRate = 500e3, sendTo, setRate, wantKey }) {
     const viewers = new Map(); // peer id -> { peer, dc, rate, needKey, frames }
     let frameNo = 0;
     let rate = startRate;
@@ -115,7 +115,7 @@ const Engine = (() => {
 
     function addViewer(peer, dc) {
       if (viewers.has(peer.id)) return;
-      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true, queue: [], queued: 0 });
+      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true, queue: [], queued: 0, sentWin: 0, lastBuffered: 0, lastBacklog: 0, tput: 0, calm: 0, full: 0 });
       sendTo(peer, { type: 'engine-config', stream: number, ...config });
       askKey(); // a new viewer can only start on a keyframe
     }
@@ -137,7 +137,8 @@ const Engine = (() => {
 
     function pace() {
       const now = performance.now();
-      const bps = Math.max(MIN_PACE, rate * PACE_FACTOR);
+      // window.__testUploadBps: tests stand in a slow upload this way.
+      const bps = Math.min(window.__testUploadBps || Infinity, Math.max(MIN_PACE, rate * PACE_FACTOR));
       budget = Math.min(BURST, budget + ((now - lastPace) / 1000) * (bps / 8));
       lastPace = now;
       let more = false;
@@ -145,7 +146,7 @@ const Engine = (() => {
         while (v.queue.length && budget > 0) {
           const p = v.queue.shift();
           v.queued -= p.byteLength;
-          if (v.dc.readyState === 'open') v.dc.send(p);
+          if (v.dc.readyState === 'open') { v.dc.send(p); v.sentWin += p.byteLength; }
           budget -= p.byteLength;
         }
         if (v.queue.length) more = true;
@@ -172,27 +173,80 @@ const Engine = (() => {
       if (!pacing) { pacing = true; lastPace = performance.now(); pace(); }
     }
 
-    function onControl(peer, msg) {
-      const v = viewers.get(peer.id);
-      if (!v) return;
-      if (msg.type === 'engine-keyframe') { v.needKey = true; askKey(); }
-      if (msg.type !== 'engine-feedback') return;
-      v.rate = rateStep(v.rate, msg, v.dc.bufferedAmount + v.queued, minRate, maxRate);
+    // The stream goes at the slowest viewer's rate.
+    function applyRate() {
+      if (!viewers.size) return;
       const slowest = Math.min(...[...viewers.values()].map((x) => x.rate));
       const now = performance.now();
-      if (Math.abs(slowest - rate) / rate > 0.1 && now - lastRateAt > 500) {
+      if (Math.abs(slowest - rate) / rate > 0.05 && now - lastRateAt > 250) {
         rate = slowest;
         lastRateAt = now;
         setRate(Math.round(rate));
       }
     }
 
+    // Congestion control, every 250 ms per viewer. What really left for them
+    // (sent minus what's still waiting) is the line's speed, but only in a window
+    // where data was waiting from start to end: otherwise the sender was just idle
+    // and the number says nothing about the line. A backlog over 256 KB for two
+    // windows in a row (one keyframe alone doesn't count) means the line is full:
+    // go just under its speed. With little waiting for 2 s, probe 8% higher.
+    const WINDOW = 250;
+    const cc = setInterval(() => {
+      for (const v of viewers.values()) {
+        const buffered = v.dc.bufferedAmount;
+        const backlog = buffered + v.queued;
+        const drained = Math.max(0, v.sentWin - (buffered - v.lastBuffered));
+        const saturated = v.lastBacklog > 64 * 1024 && backlog > 64 * 1024;
+        if (saturated) {
+          const speed = (drained * 8 * 1000) / WINDOW;
+          v.tput = v.tput ? v.tput * 0.7 + speed * 0.3 : speed;
+        }
+        // Only raise the rate when the stream actually uses most of it: a still
+        // screen sends little and would otherwise push the rate far above the line.
+        const using = (v.sentWin * 8 * 1000) / WINDOW >= v.rate * 0.6;
+        v.lastBuffered = buffered;
+        v.lastBacklog = backlog;
+        v.sentWin = 0;
+        v.full = backlog > 256 * 1024 ? (v.full || 0) + 1 : 0;
+        if (v.full >= 2) {
+          const target = v.tput ? v.tput * 0.85 : v.rate * 0.85;
+          if (v.rate > target) v.rate = Math.max(minRate, v.tput ? v.tput * 0.7 : minRate, target);
+          v.calm = 0;
+        } else if (backlog < 64 * 1024 && using && ++v.calm >= 8) {
+          v.rate = Math.min(maxRate, v.rate * 1.08);
+          v.calm = 4; // keep probing once a second while it stays calm
+        }
+      }
+      applyRate();
+    }, WINDOW);
+
+    function onControl(peer, msg) {
+      const v = viewers.get(peer.id);
+      if (!v) return;
+      if (msg.type === 'engine-keyframe') { v.needKey = true; askKey(); }
+      if (msg.type !== 'engine-feedback') return;
+      // The viewer's decoder falling behind is a reason to slow down too.
+      if (msg.queue > 3) { v.rate = Math.max(minRate, v.rate * 0.85); applyRate(); }
+    }
+
+    // A new picture size or frame rate from the encoder: tell every viewer.
+    function reconfigure(change) {
+      Object.assign(config, change);
+      for (const v of viewers.values()) sendTo(v.peer, { type: 'engine-config', stream: number, ...config });
+    }
+
     function stop() {
+      clearInterval(cc);
       for (const v of viewers.values()) sendTo(v.peer, { type: 'engine-end', stream: number });
       viewers.clear();
     }
 
-    return { addViewer, removeViewer, push, onControl, stop, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
+    function backlog() {
+      return Math.max(0, ...[...viewers.values()].map((v) => v.dc.bufferedAmount + v.queued));
+    }
+
+    return { addViewer, removeViewer, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
   }
 
   // ---------------------------------------------------------------- WebCodecs sender (tests)
@@ -291,7 +345,12 @@ const Engine = (() => {
         s.config = msg;
         onTrack(generator, msg);
       }
+      const sameCodec = s.config && s.config.codec === msg.codec && s.decoder && s.decoder.state === 'configured';
       s.config = msg;
+      // Only the size changed: the next keyframe carries it, and resetting the
+      // decoder here would freeze the picture until the keyframe after that.
+      if (sameCodec && s.started) return;
+      s.started = true;
       if (s.decoder && s.decoder.state !== 'closed') s.decoder.close();
       s.decoder = new VideoDecoder({
         output: (frame) => { st.decoded++; s.writer.write(frame).catch(() => frame.close()); },

@@ -161,6 +161,7 @@ const I18n = (() => {
     '{0} is now your friend. Call them anytime from the home screen.': '{0} est maintenant ton ami. Appelle-le quand tu veux depuis l’accueil.',
     'Smart streaming': 'Stream intelligent',
     'Native streaming engine (beta)': 'Moteur de stream natif (bêta)',
+    'Hide Miserecord from my screen share': 'Masquer Miserecord de mon partage d’écran',
     'Native engine': 'Moteur natif',
     "The native streaming engine stopped, so your share ended. Share again to use the standard stream.": 'Le moteur de stream natif s’est arrêté, ton partage a donc pris fin. Partage à nouveau pour utiliser le stream standard.',
     'Adjust automatically when a stream struggles': 'Ajuster tout seul quand un stream rame',

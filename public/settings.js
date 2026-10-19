@@ -29,6 +29,9 @@ const SETTINGS_DEFAULTS = {
   micGain: 100,         // your microphone volume for everyone, 0-200%
   adaptive: true,       // smart streaming: start where this computer can, step down when it struggles
   engine: true,         // native capture + hardware encoder for screen shares, when everyone can show it
+  // While you share a whole screen, leave Miserecord's window out of the capture
+  // (no endless mirror). Windows then also leaves it out of screenshots.
+  hideFromShare: true,
 };
 
 // Earlier versions saved their (lower) defaults with every settings change.
@@ -346,6 +349,9 @@ function onSettingChanged(key) {
     case 'language':
       I18n.apply(settings.language);
       break;
+    case 'hideFromShare':
+      if (window.miserecordDesktop && window.miserecordDesktop.setHideFromShare) window.miserecordDesktop.setHideFromShare(settings.hideFromShare);
+      break;
     case 'micId':
     case 'echo':
     case 'noise':
@@ -476,6 +482,7 @@ function initSettings() {
   bindSelect('#sCodec', 'codec');
   bindSwitch('#sAdaptive', 'adaptive');
   bindSwitch('#sEngine', 'engine');
+  bindSwitch('#sHideFromShare', 'hideFromShare');
   const codecs = supportedVideoCodecs();
   $('#sCodec').innerHTML = '';
   $('#sCodec').append(new Option('Automatic', 'auto'));
@@ -538,6 +545,8 @@ function openSettings() {
   $('#sCodec').value = settings.codec;
   $('#sAdaptive').checked = settings.adaptive;
   $('#sEngine').checked = settings.engine;
+  $('#sHideFromShare').checked = settings.hideFromShare;
+  $('#sHideRow').hidden = !window.miserecordDesktop;
   $('#sEngine').closest('.row').hidden = !(Native.caps && (Native.caps.codecs || []).length);
   syncSpecs();
   syncExtras();

@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('miserecordDesktop', {
   },
   // The page tells us when a screen share stops: captures see the app again.
   shareEnded: () => ipcRenderer.send('share-ended'),
+  setHideFromShare: (on) => ipcRenderer.send('hide-from-share', !!on),
   setStreaming: (on) => ipcRenderer.send('streaming', !!on), // while you share or stream a file
 
   // Native streaming engine: capture and hardware encoding in miserecord-capture.

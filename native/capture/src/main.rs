@@ -9,7 +9,8 @@
 //       (u32 length, u8 flags: 1 = keyframe, u8 codec: 1 = H.264, 2 = AV1,
 //       u16 width, u16 height, u16 0, u64 capture time in microseconds, all
 //       little-endian) and the payload (Annex B for H.264, OBUs for AV1).
-//       stdin takes lines: "key", "bitrate N", "quit".
+//       stdin takes lines: "key", "bitrate N", "size W H FPS" (a new stream size
+//       and frame rate, live), "quit".
 //       stderr gets one JSON line per event: ready, stats (every second), error.
 //
 // See docs/native-engine.md.
@@ -22,7 +23,7 @@ mod gpu;
 
 use std::collections::VecDeque;
 use std::io::{BufRead, Write};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -160,8 +161,13 @@ fn run() -> windows::core::Result<()> {
         _ => unreachable!(),
     };
     // The stream keeps the screen's shape and fits inside width x height.
-    let scale = f64::min(1.0, f64::min(args.width as f64 / cw as f64, args.height as f64 / ch as f64));
-    let (ow, oh) = (((cw as f64 * scale) as u32) & !1, ((ch as f64 * scale) as u32) & !1);
+    let fit = |bw: u32, bh: u32| {
+        let scale = f64::min(1.0, f64::min(bw as f64 / cw as f64, bh as f64 / ch as f64));
+        (((cw as f64 * scale) as u32) & !1, ((ch as f64 * scale) as u32) & !1)
+    };
+    let (mut ow, mut oh) = fit(args.width, args.height);
+    let mut fps = args.fps;
+    let mut bitrate = args.bitrate;
 
     // The asked-for codec if the card has it in hardware, else the best one it has.
     let order: Vec<Codec> = match args.codec {
@@ -179,12 +185,14 @@ fn run() -> windows::core::Result<()> {
         return Err(windows::core::Error::new(windows::core::HRESULT(0x80004001u32 as i32), "no hardware video encoder on this graphics card"));
     };
 
-    let converter = Arc::new(Sendable(convert::Converter::new(&gpu, cw, ch, ow, oh, RING)?));
+    // Swapped for a new one when the stream changes size; capture skips frames meanwhile.
+    let converter: Arc<Mutex<Sendable<Option<convert::Converter>>>> =
+        Arc::new(Mutex::new(Sendable(Some(convert::Converter::new(&gpu, cw, ch, ow, oh, RING)?))));
     let free: Arc<Mutex<VecDeque<usize>>> = Arc::new(Mutex::new((0..RING).collect()));
     let (tx, rx) = mpsc::channel::<(usize, i64)>();
     let captured = Arc::new(AtomicU64::new(0));
     let dropped = Arc::new(AtomicU64::new(0));
-    let interval = 10_000_000 / args.fps as i64; // 100 ns units
+    let interval = Arc::new(AtomicI64::new(10_000_000 / args.fps as i64)); // 100 ns units
 
     {
         let converter = converter.clone();
@@ -192,7 +200,9 @@ fn run() -> windows::core::Result<()> {
         let captured = captured.clone();
         let dropped = dropped.clone();
         let mut due: i64 = i64::MIN / 2;
+        let interval = interval.clone();
         let on_frame = move |texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, time: i64, w: u32, h: u32| {
+            let interval = interval.load(Ordering::Relaxed);
             // A 144 Hz screen hands over more frames than the stream needs. Frames come
             // with some jitter, so keep a schedule instead of a strict minimum gap.
             if time < due - interval / 4 {
@@ -205,7 +215,11 @@ fn run() -> windows::core::Result<()> {
                 dropped.fetch_add(1, Ordering::Relaxed); // the encoder is behind: skip, don't queue up delay
                 return;
             };
-            if converter.0.convert(texture, w.min(cw), h.min(ch), slot).is_ok() {
+            let ok = match converter.lock().unwrap().0.as_ref() {
+                Some(c) => c.convert(texture, w.min(cw), h.min(ch), slot).is_ok(),
+                None => false,
+            };
+            if ok {
                 let _ = tx.send((slot, time));
             } else {
                 free.lock().unwrap().push_back(slot);
@@ -232,8 +246,9 @@ fn run() -> windows::core::Result<()> {
     let quit = Arc::new(AtomicBool::new(false));
     let want_key = Arc::new(AtomicBool::new(false));
     let new_rate = Arc::new(AtomicU32::new(0));
+    let new_size: Arc<Mutex<Option<(u32, u32, u32)>>> = Arc::new(Mutex::new(None));
     {
-        let (quit, want_key, new_rate) = (quit.clone(), want_key.clone(), new_rate.clone());
+        let (quit, want_key, new_rate, new_size) = (quit.clone(), want_key.clone(), new_rate.clone(), new_size.clone());
         std::thread::spawn(move || {
             for line in std::io::stdin().lock().lines() {
                 let Ok(line) = line else { break };
@@ -241,6 +256,12 @@ fn run() -> windows::core::Result<()> {
                 match parts.next() {
                     Some("key") => want_key.store(true, Ordering::Relaxed),
                     Some("bitrate") => new_rate.store(parts.next().and_then(|v| v.parse().ok()).unwrap_or(0), Ordering::Relaxed),
+                    Some("size") => {
+                        let n: Vec<u32> = parts.filter_map(|v| v.parse().ok()).collect();
+                        if n.len() == 3 && n[0] >= 160 && n[1] >= 90 && n[2] >= 1 {
+                            *new_size.lock().unwrap() = Some((n[0], n[1], n[2].min(240)));
+                        }
+                    }
                     Some("quit") => break,
                     _ => {}
                 }
@@ -295,12 +316,38 @@ fn run() -> windows::core::Result<()> {
         }
         let r = new_rate.swap(0, Ordering::Relaxed);
         if r > 0 {
+            bitrate = r;
             encoder.set_bitrate(r);
+        }
+        // A new size or frame rate: a fresh converter and encoder, then a keyframe.
+        let resize = new_size.lock().unwrap().take();
+        if let Some((w, h, f)) = resize {
+            let (nw, nh) = fit(w, h);
+            if (nw, nh, f) != (ow, oh, fps) {
+                let codec = encoder.codec;
+                converter.lock().unwrap().0 = None;
+                while rx.try_recv().is_ok() {}
+                inflight.clear();
+                pushed_at.clear();
+                *free.lock().unwrap() = (0..RING).collect();
+                encoder.finish();
+                match Encoder::new(&gpu, codec, nw, nh, f, bitrate)? {
+                    Some(e) => encoder = e,
+                    None => return Err(windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32), "encoder lost on resize")),
+                }
+                converter.lock().unwrap().0 = Some(convert::Converter::new(&gpu, cw, ch, nw, nh, RING)?);
+                interval.store(10_000_000 / f as i64, Ordering::Relaxed);
+                (ow, oh, fps) = (nw, nh, f);
+                event(format!("{{\"event\":\"resized\",\"width\":{},\"height\":{},\"fps\":{}}}", ow, oh, fps));
+            }
         }
         if encoder.wants_input() {
             match rx.recv_timeout(Duration::from_millis(2)) {
                 Ok((slot, time)) => {
-                    let texture = converter.0.targets[slot].0.clone();
+                    let texture = match converter.lock().unwrap().0.as_ref() {
+                        Some(c) => c.targets[slot].0.clone(),
+                        None => continue,
+                    };
                     encoder.push(&texture, time)?;
                     inflight.push_back(slot);
                     pushed_at.push_back(Instant::now());

@@ -179,6 +179,10 @@ function start() {
   ipcMain.on('engine-stop', () => engine.stop());
   app.on('will-quit', () => engine.stop());
   ipcMain.on('streaming', (_e, on) => setStreamingPriority(!!on));
+  ipcMain.on('hide-from-share', (_e, on) => {
+    hideFromShare = !!on;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setContentProtection(hideFromShare && sharingScreen);
+  });
   ipcMain.handle('system-info', systemInfo);
   ipcMain.on('set-language', (_e, lang) => {
     language = lang === 'fr' ? 'fr' : 'en';
@@ -387,11 +391,17 @@ function setupScreenPicker(ses) {
 // While you share a monitor, Miserecord's own window is left out of the capture
 // (Windows' "exclude from capture"), so your preview can't film itself into an
 // endless, flashing mirror. Your friends see whatever is behind the window instead.
+// Settings > Video > "Hide Miserecord from my screen share" (on by default).
+let hideFromShare = true;
+let sharingScreen = false;
+
 function startScreenShare() {
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setContentProtection(true);
+  sharingScreen = true;
+  if (hideFromShare && mainWindow && !mainWindow.isDestroyed()) mainWindow.setContentProtection(true);
 }
 
 function endScreenShare() {
+  sharingScreen = false;
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setContentProtection(false);
 }
 
