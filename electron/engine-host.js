@@ -36,14 +36,12 @@ function probe() {
 }
 
 function setPick(source) {
-  if (process.env.ENGINE_DEBUG) console.log('engine setPick', source && source.id, source && source.display_id);
   lastPick = source ? { id: source.id, displayId: source.display_id } : null;
 }
 
 // Helper arguments for what was picked: a window by its handle, a monitor by a
 // point on it (physical pixels, as the helper is DPI aware).
 function targetArgs() {
-  if (process.env.ENGINE_DEBUG) console.log('engine targetArgs, pick =', JSON.stringify(lastPick));
   if (!lastPick) return null;
   const m = /^window:(\d+):/.exec(lastPick.id);
   if (m) return ['--window', m[1]];

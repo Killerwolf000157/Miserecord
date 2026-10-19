@@ -1,6 +1,6 @@
 # Native streaming engine (branch `native-engine`)
 
-Work in progress. The released app streams screens through Chromium's WebRTC,
+Shipped in 2.0 (Settings > Video > Native streaming engine). Before it, the app streamed screens through Chromium's WebRTC,
 which on Windows only uses the graphics card for H.264: AV1, VP9 and VP8 run on
 the processor, the capture runs at normal priority, and frames are copied off the
 GPU before encoding. On a gaming laptop that can drop a stream to a few frames per
@@ -31,8 +31,10 @@ streaming moves to native code.
   RX 7000, Arc), otherwise HEVC or H.264. Low-latency mode, CBR-ish, no B-frames,
   periodic intra refresh plus keyframes on request.
 - **Transport**: the call's existing peer-to-peer connection (DTLS encrypted),
-  a second data channel `video` that is unordered with `maxRetransmits: 0`, so a
-  lost packet never holds up the next frame. No server, no relay.
+  a second data channel `video`, reliable but unordered (partly reliable modes
+  lost ~40% of frames between two apps). Packets are paced at 3x the bitrate so
+  big keyframes don't overflow the receiver; a viewer more than 2 MB behind skips
+  to the next keyframe. No server, no relay.
 - **Decode**: WebCodecs `VideoDecoder` with `hardwareAcceleration: 'prefer-hardware'`,
   drawn to a canvas in the stream tile. Audio stays on WebRTC.
 - **Fallback**: no helper, no hardware encoder, or a viewer that can't decode the
@@ -65,7 +67,7 @@ is preceded by a JSON `engine-config` message on the normal channel
   goes over 2% or the viewer's queue grows, add 5% per second while clean, never
   above the Settings cap. The data channel's `bufferedAmount` is a second brake.
 
-## Stages
+## Stages (1-3 done in 2.0)
 
 1. **Transport and decoding in the page** (this branch, now): send frames from
    Chromium's own WebCodecs encoder over the `video` channel and decode them on
