@@ -27,6 +27,11 @@ pub struct Converter {
 
 impl Converter {
     pub fn new(gpu: &Gpu, in_w: u32, in_h: u32, out_w: u32, out_h: u32, ring: usize) -> Result<Converter> {
+        Self::with_input(gpu, in_w, in_h, out_w, out_h, ring, false)
+    }
+
+    /// input_yuv: the source is NV12 video (tests replaying saved frames), not screen RGB.
+    pub fn with_input(gpu: &Gpu, in_w: u32, in_h: u32, out_w: u32, out_h: u32, ring: usize, input_yuv: bool) -> Result<Converter> {
         unsafe {
             let vdev: ID3D11VideoDevice = gpu.device.cast()?;
             let vctx: ID3D11VideoContext1 = gpu.context.cast()?;
@@ -44,7 +49,7 @@ impl Converter {
             let enumerator = vdev.CreateVideoProcessorEnumerator(&desc)?;
             let processor = vdev.CreateVideoProcessor(&enumerator, 0)?;
             // Screen pixels are full-range RGB; encoders expect studio-range BT.709.
-            vctx.VideoProcessorSetStreamColorSpace1(&processor, 0, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+            vctx.VideoProcessorSetStreamColorSpace1(&processor, 0, if input_yuv { DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709 } else { DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 });
             vctx.VideoProcessorSetOutputColorSpace1(&processor, DXGI_COLOR_SPACE_YCBCR_STUDIO_G22_LEFT_P709);
             vctx.VideoProcessorSetStreamAutoProcessingMode(&processor, 0, false);
             let mut targets = Vec::with_capacity(ring);

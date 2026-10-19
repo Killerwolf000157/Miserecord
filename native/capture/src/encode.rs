@@ -129,10 +129,20 @@ impl Encoder {
             let api: Option<ICodecAPI> = mft.cast().ok();
             let mut refused = Vec::new();
             if let Some(api) = &api {
-                let speed = std::env::var("MR_SPEED").ok().and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                // MR_* variables: test-only overrides for quality measurements.
+                let env = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<u32>().ok());
+                // Quality preset by size: the best one up to 1080p, the middle one at 1440p,
+                // the fastest beyond, which keeps every size well inside 60 fps (measured:
+                // ~5 ms a frame at 1080p on the best). Worth ~0.2 dB at the same bitrate.
+                let pixels = width * height;
+                let speed = env("MR_SPEED").unwrap_or(if pixels <= 1920 * 1080 { 100 } else if pixels <= 2560 * 1440 { 50 } else { 0 });
+                let rc = env("MR_RC").unwrap_or(eAVEncCommonRateControlMode_CBR.0 as u32);
+                let mut extra: Vec<(&GUID, VARIANT, &str)> = Vec::new();
+                if let Some(q) = env("MR_MAXQP") { extra.push((&CODECAPI_AVEncVideoMaxQP, VARIANT::from(q), "max qp")); }
+                if let Some(q) = env("MR_MINQP") { extra.push((&CODECAPI_AVEncVideoMinQP, VARIANT::from(q), "min qp")); }
                 let settings: [(&GUID, VARIANT, &str); 8] = [
                     (&CODECAPI_AVLowLatencyMode, VARIANT::from(true), "low latency"),
-                    (&CODECAPI_AVEncCommonRateControlMode, VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32), "cbr"),
+                    (&CODECAPI_AVEncCommonRateControlMode, VARIANT::from(rc), "rate control"),
                     (&CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(bitrate), "bitrate"),
                     (&CODECAPI_AVEncCommonMaxBitRate, VARIANT::from(bitrate), "max bitrate"),
                     // Half a second of buffer: steady enough for the line, small enough for low delay.
@@ -144,7 +154,7 @@ impl Encoder {
                     // Speed over squeezing every bit.
                     (&CODECAPI_AVEncCommonQualityVsSpeed, VARIANT::from(speed), "speed"),
                 ];
-                for (key, value, label) in settings.iter() {
+                for (key, value, label) in settings.iter().chain(extra.iter()) {
                     if api.SetValue(*key, value).is_err() {
                         refused.push(*label);
                     }

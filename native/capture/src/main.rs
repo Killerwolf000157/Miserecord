@@ -47,6 +47,10 @@ struct Args {
     bitrate: u32,
     seconds: u64,
     out: Option<String>,
+    dump: Option<String>, // test: save the Y plane of frames 60..60+N as they enter the encoder
+    dump_frames: usize,
+    replay: Option<String>, // test: encode frames saved with --dump instead of capturing
+    scale: Option<(u32, u32)>, // test: replay at this size
 }
 
 fn parse() -> Args {
@@ -60,6 +64,10 @@ fn parse() -> Args {
         bitrate: 8_000_000,
         seconds: 0,
         out: None,
+        dump: None,
+        dump_frames: 90,
+        replay: None,
+        scale: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(k) = it.next() {
@@ -89,6 +97,14 @@ fn parse() -> Args {
             "--bitrate" => a.bitrate = v().parse().unwrap_or(8_000_000),
             "--seconds" => a.seconds = v().parse().unwrap_or(0),
             "--out" => a.out = Some(v()),
+            "--dump" => a.dump = Some(v()),
+            "--dump-frames" => a.dump_frames = v().parse().unwrap_or(90),
+            "--replay" => a.replay = Some(v()),
+            "--scale" => {
+                let w = v().parse().unwrap_or(1280);
+                let h = it.next().and_then(|x| x.parse().ok()).unwrap_or(720);
+                a.scale = Some((w, h));
+            }
             _ => {}
         }
     }
@@ -103,6 +119,110 @@ fn event(json: String) {
 
 fn esc(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+// Test-only: an NV12 texture (luma rows, then the interleaved chroma rows) read
+// back to a file.
+fn dump_nv12(gpu: &gpu::Gpu, tex: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, w: u32, h: u32, path: &str) -> windows::core::Result<()> {
+    use windows::Win32::Graphics::Direct3D11::*;
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
+    unsafe {
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: w, Height: h, MipLevels: 1, ArraySize: 1, Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0, CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32, MiscFlags: 0,
+        };
+        let mut staging = None;
+        gpu.device.CreateTexture2D(&desc, None, Some(&mut staging))?;
+        let staging = staging.unwrap();
+        gpu.context.CopyResource(&staging, tex);
+        let mut map = D3D11_MAPPED_SUBRESOURCE::default();
+        gpu.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut map))?;
+        let mut y = Vec::with_capacity((w * h * 3 / 2) as usize);
+        for row in 0..(h * 3 / 2) as usize {
+            let p = (map.pData as *const u8).add(row * map.RowPitch as usize);
+            y.extend_from_slice(std::slice::from_raw_parts(p, w as usize));
+        }
+        gpu.context.Unmap(&staging, 0);
+        let _ = std::fs::write(path, y);
+    }
+    Ok(())
+}
+
+// Test-only: encode frames saved with --dump, the same clip for every setting
+// compared, to the --out file; prints average encode time.
+fn replay(args: &Args, dir: &str) -> windows::core::Result<()> {
+    use windows::Win32::Graphics::Direct3D11::*;
+    use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_SAMPLE_DESC};
+    let meta = std::fs::read_to_string(format!("{dir}/size.txt")).unwrap_or_default();
+    let n: Vec<u32> = meta.split_whitespace().filter_map(|v| v.parse().ok()).collect();
+    let (w, h, fps) = (n[0], n[1], n[2]);
+    let mut files: Vec<_> = std::fs::read_dir(dir).unwrap().filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.extension().map(|x| x == "nv12").unwrap_or(false)).collect();
+    files.sort();
+    let gpu = gpu::create()?;
+    let codec = args.codec.unwrap_or(Codec::H264);
+    let (ew, eh) = args.scale.unwrap_or((w, h));
+    let scaler = if (ew, eh) != (w, h) { Some(convert::Converter::with_input(&gpu, w, h, ew, eh, RING, true)?) } else { None };
+    let Some(mut encoder) = Encoder::new(&gpu, codec, ew, eh, fps, args.bitrate)? else {
+        return Err(windows::core::Error::new(windows::core::HRESULT(0x80004001u32 as i32), "no encoder"));
+    };
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: w, Height: h, MipLevels: 1, ArraySize: 1, Format: DXGI_FORMAT_NV12,
+        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 }, Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32, CPUAccessFlags: 0, MiscFlags: 0,
+    };
+    let mut ring = Vec::new();
+    for _ in 0..RING {
+        let mut t = None;
+        unsafe { gpu.device.CreateTexture2D(&desc, None, Some(&mut t))? };
+        ring.push(t.unwrap());
+    }
+    let mut out = std::io::BufWriter::new(std::fs::File::create(args.out.clone().unwrap_or("NUL".into())).unwrap());
+    let interval = 10_000_000 / fps as i64;
+    let (mut next, mut done, mut ms) = (0usize, 0usize, 0f64);
+    let mut frames = Vec::new();
+    let mut pushed: VecDeque<Instant> = VecDeque::new();
+    let started = Instant::now();
+    let mut drained = false;
+    while done < files.len() && started.elapsed() < Duration::from_secs(60) {
+        if next == files.len() && !drained {
+            encoder.finish();
+            drained = true;
+        }
+        encoder.poll(&mut frames)?;
+        for f in frames.drain(..) {
+            if let Some(at) = pushed.pop_front() { ms += at.elapsed().as_secs_f64() * 1000.0; }
+            let mut header = [0u8; 20];
+            header[0..4].copy_from_slice(&(f.data.len() as u32).to_le_bytes());
+            header[4] = f.key as u8;
+            header[5] = codec.id();
+            header[6..8].copy_from_slice(&(ew as u16).to_le_bytes());
+            header[8..10].copy_from_slice(&(eh as u16).to_le_bytes());
+            header[12..20].copy_from_slice(&((f.time / 10) as u64).to_le_bytes());
+            out.write_all(&header).unwrap();
+            out.write_all(&f.data).unwrap();
+            done += 1;
+        }
+        if next < files.len() && encoder.wants_input() {
+            let data = std::fs::read(&files[next]).unwrap();
+            let tex = &ring[next % RING];
+            unsafe { gpu.context.UpdateSubresource(tex, 0, None, data.as_ptr() as *const _, w, 0) };
+            match &scaler {
+                Some(s) => {
+                    s.convert(tex, w, h, next % RING)?;
+                    encoder.push(&s.targets[next % RING].0, next as i64 * interval)?;
+                }
+                None => encoder.push(tex, next as i64 * interval)?,
+            }
+            pushed.push_back(Instant::now());
+            next += 1;
+        } else {
+            std::thread::sleep(Duration::from_micros(200));
+        }
+    }
+    let _ = out.flush();
+    println!("{{\"frames\":{},\"encodeMs\":{:.2},\"encoder\":\"{}\",\"refused\":\"{}\"}}", done, ms / done.max(1) as f64, esc(&encoder.name), encoder.refused);
+    Ok(())
 }
 
 fn main() {
@@ -124,6 +244,10 @@ fn run() -> windows::core::Result<()> {
         let codecs: Vec<String> = encode::available(&gpu).iter().map(|c| format!("\"{}\"", c.name())).collect();
         println!("{{\"adapter\":\"{}\",\"codecs\":[{}]}}", esc(&gpu.name), codecs.join(","));
         return Ok(());
+    }
+
+    if let Some(dir) = &args.replay {
+        return replay(&args, dir);
     }
 
     // A monitor is captured with Desktop Duplication on the chip that drives it,
@@ -167,7 +291,11 @@ fn run() -> windows::core::Result<()> {
     };
     let (mut ow, mut oh) = fit(args.width, args.height);
     let mut fps = args.fps;
-    let mut bitrate = args.bitrate;
+    let mut bitrate = args.bitrate; // what the app asked for
+    // The encoder's real output over its target (AV1 overshot by ~40%): the target
+    // given to the encoder is divided by this, so what goes out matches the app's.
+    let mut overshoot = 1.0f64;
+    let mut commanded = bitrate;
 
     // The asked-for codec if the card has it in hardware, else the best one it has.
     let order: Vec<Codec> = match args.codec {
@@ -277,6 +405,7 @@ fn run() -> windows::core::Result<()> {
 
     let started = Instant::now();
     let mut inflight: VecDeque<usize> = VecDeque::new();
+    let mut pushes: u64 = 0;
     let mut pushed_at: VecDeque<Instant> = VecDeque::new();
     let (mut delay_sum, mut delay_n) = (0f64, 0u32);
     let mut frames = Vec::new();
@@ -317,7 +446,8 @@ fn run() -> windows::core::Result<()> {
         let r = new_rate.swap(0, Ordering::Relaxed);
         if r > 0 {
             bitrate = r;
-            encoder.set_bitrate(r);
+            commanded = (bitrate as f64 / overshoot) as u32;
+            encoder.set_bitrate(commanded);
         }
         // A new size or frame rate: a fresh converter and encoder, then a keyframe.
         let resize = new_size.lock().unwrap().take();
@@ -331,7 +461,7 @@ fn run() -> windows::core::Result<()> {
                 pushed_at.clear();
                 *free.lock().unwrap() = (0..RING).collect();
                 encoder.finish();
-                match Encoder::new(&gpu, codec, nw, nh, f, bitrate)? {
+                match Encoder::new(&gpu, codec, nw, nh, f, commanded)? {
                     Some(e) => encoder = e,
                     None => return Err(windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32), "encoder lost on resize")),
                 }
@@ -348,6 +478,13 @@ fn run() -> windows::core::Result<()> {
                         Some(c) => c.targets[slot].0.clone(),
                         None => continue,
                     };
+                    if let Some(dir) = &args.dump {
+                        if pushes >= 60 && pushes < 60 + args.dump_frames as u64 {
+                            dump_nv12(&gpu, &texture, ow, oh, &format!("{dir}/f_{:04}.nv12", pushes - 60))?;
+                            let _ = std::fs::write(format!("{dir}/size.txt"), format!("{ow} {oh} {fps}"));
+                        }
+                    }
+                    pushes += 1;
                     encoder.push(&texture, time)?;
                     inflight.push_back(slot);
                     pushed_at.push_back(Instant::now());
@@ -367,6 +504,16 @@ fn run() -> windows::core::Result<()> {
         if last_stats.elapsed() >= Duration::from_secs(1) {
             let secs = last_stats.elapsed().as_secs_f64();
             let cap = captured.load(Ordering::Relaxed);
+            // Only judge overshoot on a busy picture (a still screen sends far less).
+            let actual = (bytes - last_bytes) as f64 * 8.0 / secs;
+            if actual > commanded as f64 * 0.7 {
+                overshoot = (overshoot * 0.7 + (actual / commanded as f64) * 0.3).clamp(1.0, 2.0);
+                let next = (bitrate as f64 / overshoot) as u32;
+                if (next as f64 - commanded as f64).abs() / commanded as f64 > 0.05 {
+                    commanded = next;
+                    encoder.set_bitrate(commanded);
+                }
+            }
             event(format!(
                 "{{\"event\":\"stats\",\"captureFps\":{:.0},\"encodeFps\":{:.0},\"mbps\":{:.1},\"dropped\":{},\"keyframes\":{},\"encodeMs\":{:.1},\"inFlight\":{}}}",
                 (cap - last_cap) as f64 / secs,
