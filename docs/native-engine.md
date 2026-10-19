@@ -30,6 +30,13 @@ streaming moves to native code.
   textures through an `IMFDXGIDeviceManager`. AV1 where the card has it (RTX 40,
   RX 7000, Arc), otherwise HEVC or H.264. Low-latency mode, CBR-ish, no B-frames,
   periodic intra refresh plus keyframes on request.
+- **Video lanes**: one data channel (SCTP) halves its window at every lost packet,
+  like one TCP connection: through a relay with a 50 ms round trip it carried
+  39 Mbps with no loss but 2.6 Mbps at 1% loss and 1.7 at 2%. The sharer opens 9
+  extra lanes to each viewer (small peer connections with one video channel
+  each, set up with `engine-lane` / `engine-lane-answer` over the call's channel)
+  and sends each packet on the lane with the least waiting. With 10 lanes the
+  real fan-out reached 9-15 Mbps at 2% loss, 12-20 at 1%, and its cap with none.
 - **Per-viewer quality**: viewers report how big they show each stream
   (`stream-view`: the picture's size in physical pixels, full when zoomed,
   hidden when minimized). A hidden viewer gets nothing. Viewers who show the

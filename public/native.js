@@ -111,6 +111,8 @@ const Native = {
       return;
     }
     this.fanout.addViewer(peer, peer.engineDc);
+    Lanes.open(peer); // more lanes for the video, each with its own congestion window
+    for (const lane of peer.lanes || []) if (lane.dc.readyState === 'open') this.fanout.addLane(peer.id, lane.dc);
     // They may have said how they show it before the share reached them.
     const view = peer.views && peer.views.get(this.streamId);
     if (view) this.fanout.setView(peer.id, view);
@@ -331,6 +333,92 @@ async function syncEngineStreams() {
   }
 }
 
+// ---------------------------------------------------------------- video lanes
+// One data channel carries little over a line that loses packets: its
+// congestion control halves its window at every loss, like one TCP connection.
+// Measured through a relay with a 50 ms round trip: 39 Mbps with no loss, but
+// 2.6 Mbps at 1% loss and 1.7 at 2% (what a friend's 40 Mbps upload gave the
+// stream). Several connections side by side add up, as in a speed test (1%
+// loss: 4.1 Mbps with 2, 8.6 with 4), so the sharer opens extra lanes to each
+// viewer: small peer connections with one video channel each, set up over the
+// call's own channel. Older versions don't answer and keep the one channel.
+const LANES = 9; // plus the main video channel: 10
+const Lanes = {
+  // Sharer side: open the lanes to a viewer (once per call).
+  async open(peer) {
+    peer.lanes ||= [];
+    if (peer.lanesOpening) return;
+    peer.lanesOpening = true;
+    const offer = async (n) => {
+      const pc = new RTCPeerConnection({ iceServers: iceServers() });
+      const dc = Engine.channel(pc);
+      const lane = { n, pc, dc };
+      peer.lanes.push(lane);
+      dc.addEventListener('open', () => {
+        Log.info('engine', 'video lane open', { peer: peer.id.slice(0, 6), n });
+        if (Native.fanout) Native.fanout.addLane(peer.id, dc);
+      });
+      try {
+        await pc.setLocalDescription(await pc.createOffer());
+        await gathered(pc);
+        sendTo(peer, { type: 'engine-lane', n, sdp: pc.localDescription.sdp });
+      } catch (err) {
+        Log.warn('engine', 'video lane not offered', err);
+      }
+    };
+    const todo = [];
+    for (let n = peer.lanes.length; n < LANES; n++) todo.push(offer(n));
+    await Promise.all(todo);
+  },
+
+  // Sharer side: the viewer's answer.
+  async answered(peer, msg) {
+    const lane = (peer.lanes || []).find((l) => l.n === msg.n);
+    if (!lane || lane.pc.signalingState !== 'have-local-offer' || typeof msg.sdp !== 'string') return;
+    try { await lane.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }); } catch (err) { Log.warn('engine', 'video lane answer failed', err); }
+  },
+
+  // Viewer side: a lane offered by someone sharing to us.
+  async offered(peer, msg) {
+    if (typeof msg.sdp !== 'string' || !(msg.n >= 0 && msg.n < 16)) return;
+    peer.lanesIn ||= new Map();
+    const old = peer.lanesIn.get(msg.n);
+    if (old) old.pc.close();
+    const pc = new RTCPeerConnection({ iceServers: iceServers() });
+    const dc = Engine.channel(pc);
+    peer.lanesIn.set(msg.n, { pc, dc });
+    dc.addEventListener('open', () => engineReceiver(peer).addChannel(dc));
+    try {
+      await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await gathered(pc);
+      sendTo(peer, { type: 'engine-lane-answer', n: msg.n, sdp: pc.localDescription.sdp });
+    } catch (err) {
+      Log.warn('engine', 'video lane not answered', err);
+    }
+  },
+
+  close(peer) {
+    for (const l of peer.lanes || []) l.pc.close();
+    for (const l of (peer.lanesIn || new Map()).values()) l.pc.close();
+    peer.lanes = [];
+    peer.lanesIn = new Map();
+    peer.lanesOpening = false;
+  },
+};
+
+// Candidates go in the description itself (no trickling for lanes): wait for
+// gathering, at most 3 s.
+function gathered(pc) {
+  return new Promise((resolve) => {
+    if (pc.iceGatheringState === 'complete') return resolve();
+    const t = setTimeout(resolve, 3000);
+    pc.addEventListener('icegatheringstatechange', () => {
+      if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
+    });
+  });
+}
+
 function engineReceiver(peer) {
   if (!peer.engineRx) {
     peer.engineRx = Engine.createReceiver({
@@ -374,6 +462,12 @@ function onEngineMessage(peer, msg) {
     case 'engine-config':
     case 'engine-end':
       engineReceiver(peer).onControl(msg);
+      break;
+    case 'engine-lane':
+      Lanes.offered(peer, msg);
+      break;
+    case 'engine-lane-answer':
+      Lanes.answered(peer, msg);
       break;
     case 'engine-feedback':
     case 'engine-keyframe':

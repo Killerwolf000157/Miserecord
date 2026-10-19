@@ -120,7 +120,7 @@ const Engine = (() => {
 
     function addViewer(peer, dc) {
       if (viewers.has(peer.id)) return;
-      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true, layer: 0, target: 0, next: 0, queue: [], queued: 0, sentWin: 0, lastBuffered: 0, lastBacklog: 0, tput: 0, calm: 0, full: 0, delay: 0 });
+      viewers.set(peer.id, { peer, dc, lanes: [dc], rate: startRate, needKey: true, layer: 0, target: 0, next: 0, queue: [], queued: 0, sentWin: 0, lastBuffered: 0, lastBacklog: 0, tput: 0, calm: 0, full: 0, delay: 0 });
       delayChanged();
       sendTo(peer, { type: 'engine-config', stream: number, ...config });
       askKey(); // a new viewer can only start on a keyframe
@@ -151,6 +151,22 @@ const Engine = (() => {
     function setLowWant(bps) {
       lowWant = bps;
       applyRate();
+    }
+
+    // Another video lane to this viewer (Lanes in native.js): its own connection,
+    // so its own congestion window. Packets go to whichever lane has the least
+    // waiting; the receiver puts frames back together whatever lane brought them.
+    function addLane(id, dc) {
+      const v = viewers.get(id);
+      if (v && !v.lanes.includes(dc)) v.lanes.push(dc);
+    }
+
+    const open = (v) => v.lanes.some((d) => d.readyState === 'open');
+    const waiting = (v) => v.lanes.reduce((n, d) => n + (d.readyState === 'open' ? d.bufferedAmount : 0), 0);
+    function laneFor(v) {
+      let best = null;
+      for (const d of v.lanes) if (d.readyState === 'open' && (!best || d.bufferedAmount < best.bufferedAmount)) best = d;
+      return best;
     }
 
     function removeViewer(id) {
@@ -188,7 +204,8 @@ const Engine = (() => {
         while (v.queue.length && budget > 0) {
           const p = v.queue.shift();
           v.queued -= p.byteLength;
-          if (v.dc.readyState === 'open') { v.dc.send(p); v.sentWin += p.byteLength; }
+          const lane = laneFor(v);
+          if (lane) { lane.send(p); v.sentWin += p.byteLength; }
           budget -= p.byteLength;
         }
         if (v.queue.length) more = true;
@@ -204,7 +221,7 @@ const Engine = (() => {
       let built = null;
       let sent = false;
       for (const v of viewers.values()) {
-        if (v.dc.readyState !== 'open') continue;
+        if (!open(v)) continue;
         // A viewer whose window is minimized gets nothing until they look again.
         if (v.paused) { v.needKey = true; continue; }
         if (layer !== v.layer) {
@@ -215,7 +232,7 @@ const Engine = (() => {
         }
         // A viewer whose line is full (queued here or in the channel) skips frames
         // until the next keyframe, instead of falling further behind.
-        if (v.queued + v.dc.bufferedAmount > skipAt(v)) { v.needKey = true; st.skipped++; askKey(layer); continue; }
+        if (v.queued + waiting(v) > skipAt(v)) { v.needKey = true; st.skipped++; askKey(layer); continue; }
         if (v.needKey && !frame.key) continue;
         v.needKey = false;
         built ||= packets(number, 0, frame.key, frame.time, data);
@@ -270,14 +287,18 @@ const Engine = (() => {
     // A viewer with a stream delay holds frames back anyway: data waiting here up
     // to half that delay isn't a full line, just a burst being spread out, and
     // only a backlog worth the whole delay is skipped.
-    const fullAt = (v) => Math.max(256 * 1024, (v.rate / 8) * (v.delay / 2000));
+    // With several lanes each holds a little in flight, so "little waiting" and
+    // "full" scale with how many are open.
+    const lanesOpen = (v) => Math.max(1, v.lanes.filter((d) => d.readyState === 'open').length);
+    const calmAt = (v) => Math.max(64 * 1024, 24 * 1024 * lanesOpen(v));
+    const fullAt = (v) => Math.max(256 * 1024, 64 * 1024 * lanesOpen(v), (v.rate / 8) * (v.delay / 2000));
     const skipAt = (v) => Math.max(2 * 1024 * 1024, (v.rate / 8) * (v.delay / 1000));
     const cc = setInterval(() => {
       for (const v of viewers.values()) {
-        const buffered = v.dc.bufferedAmount;
+        const buffered = waiting(v);
         const backlog = buffered + v.queued;
         const drained = Math.max(0, v.sentWin - (buffered - v.lastBuffered));
-        const saturated = v.lastBacklog > 64 * 1024 && backlog > 64 * 1024;
+        const saturated = v.lastBacklog > calmAt(v) && backlog > calmAt(v);
         if (saturated) {
           const speed = (drained * 8 * 1000) / WINDOW;
           v.tput = v.tput ? v.tput * 0.7 + speed * 0.3 : speed;
@@ -293,7 +314,7 @@ const Engine = (() => {
           const target = v.tput ? v.tput * 0.85 : v.rate * 0.85;
           if (v.rate > target) v.rate = Math.max(minRate, v.tput ? v.tput * 0.7 : minRate, target);
           v.calm = 0;
-        } else if (backlog < 64 * 1024 && using && ++v.calm >= 8) {
+        } else if (backlog < calmAt(v) && using && ++v.calm >= 8) {
           v.rate = Math.min(maxRate, v.rate * 1.08);
           v.calm = 4; // keep probing once a second while it stays calm
         }
@@ -324,10 +345,10 @@ const Engine = (() => {
     }
 
     function backlog() {
-      return Math.max(0, ...[...viewers.values()].map((v) => v.dc.bufferedAmount + v.queued));
+      return Math.max(0, ...[...viewers.values()].map((v) => waiting(v) + v.queued));
     }
 
-    return { addViewer, removeViewer, setView, setLayer, setLowWant, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
+    return { addViewer, addLane, removeViewer, setView, setLayer, setLowWant, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
   }
 
   // ---------------------------------------------------------------- WebCodecs sender (tests)
@@ -460,7 +481,12 @@ const Engine = (() => {
       s.needKey = true;
     }
 
-    dc.addEventListener('message', (e) => {
+    // Packets come on the main video channel and on any extra lanes.
+    function addChannel(channel) {
+      channel.addEventListener('message', onPacket);
+    }
+    dc.addEventListener('message', onPacket);
+    function onPacket(e) {
       const p = readPacket(e.data);
       if (!p) return;
       total.packets++;
@@ -479,7 +505,7 @@ const Engine = (() => {
       st.frames++;
       total.complete++;
       arrived(s, p.frame, f);
-    });
+    }
 
     // The channel is reliable but unordered: when a packet is lost on the way and
     // sent again, the frames after it can finish first. Each frame needs the one
@@ -707,7 +733,7 @@ const Engine = (() => {
       return [...streams.values()].map((s) => ({ number: s.number, id: s.config && String(s.config.id), target: s.target, delay: s.delay, auto: s.auto }));
     }
 
-    return { onControl, stop, setTargetDelay, setDelay, streamsInfo, stats: () => ({ ...st, ...total }) };
+    return { onControl, stop, setTargetDelay, setDelay, streamsInfo, addChannel, stats: () => ({ ...st, ...total }) };
   }
 
   return { channel, decodable, createFanout, createSender, createReceiver, CODECS };

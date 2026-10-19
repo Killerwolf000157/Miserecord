@@ -1004,6 +1004,7 @@ function removePeer(peer, reason) {
   for (const kind of ['screen', 'media']) if (state[kind]) state[kind].senders.delete(peer.id);
   if (peer.engineRx) peer.engineRx.stop();
   Native.removeViewer(peer);
+  Lanes.close(peer);
   detachMeter(peer.card);
   peer.card.remove();
   if (!state.peers.size) {
