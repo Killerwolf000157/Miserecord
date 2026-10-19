@@ -1190,7 +1190,7 @@ function setupDataChannel(peer, dc) {
     if (state.session) stopRinging();
     if (state.lobby) clearTimeout(state.lobby.timeout);
     showScreen('call');
-    sendTo(peer, { type: 'hello', name: state.name, muted: state.muted });
+    sendTo(peer, { type: 'hello', name: state.name, muted: state.muted, version: APP_VERSION });
     // What we can decode for a native share (public/native.js).
     sendTo(peer, { type: 'engine-hello', codecs: state.engineDecode || [] });
     // 1:1 calls swap identity keys over this direct, encrypted channel so you
@@ -1287,6 +1287,9 @@ function onDataMessage(peer, msg) {
       break;
     case 'hello':
       setPeerName(peer, msg.name || 'Someone');
+      // Their app's version (from 2.1.3 on): Stream info says when theirs is older.
+      peer.version = /^[\d.]{1,20}$/.test(String(msg.version || '')) ? msg.version : '';
+      Log.info('pc', 'their app', { peer: peer.id.slice(0, 6), version: peer.version || 'older than 2.1.3' });
       peer.card.querySelector('.micoff').hidden = !msg.muted;
       addSystem(`${peer.name} joined`);
       break;
@@ -2205,6 +2208,16 @@ function tickMeters() {
 // ===================================================================
 // Helpers
 // ===================================================================
+// This app's version (the desktop app puts it in the user agent).
+// The installed app's user agent has it; desktop.js sets it from the app itself
+// as soon as it knows (also in development).
+let APP_VERSION = (navigator.userAgent.match(/Miserecord\/(\d+\.\d+\.\d+)/) || [])[1] || '';
+const versionBelow = (v, min) => {
+  const a = String(v || '0').split('.').map(Number), b = min.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) < (b[i] || 0);
+  return false;
+};
+
 // One getStats() per connection per moment: the checks of the 2-s tick (route,
 // smart streaming, codec load, sound sync, Stream info) share it instead of
 // each asking the browser for the whole report again.

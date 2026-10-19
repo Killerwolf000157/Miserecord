@@ -137,6 +137,7 @@
       $('#sUpdateCheck').disabled = true;
     }
     Log.info('app', 'desktop version', { version, packaged });
+    APP_VERSION = String(version || APP_VERSION);
   });
   $('#sUpdateCheck').onclick = () => desk.checkForUpdates();
   $('#sUninstall').onclick = () => {

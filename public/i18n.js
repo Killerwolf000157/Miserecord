@@ -164,6 +164,8 @@ const I18n = (() => {
     'Hide Miserecord from my screen share': 'Masquer Miserecord de mon partage d’écran',
     'Sharpen and upscale streams I watch': 'Affiner et agrandir les streams que je regarde',
     'Streams I watch': 'Streams que je regarde',
+    '{0} lanes': '{0} voies',
+    '{0} has an older Miserecord: their stream is slower until they update (Settings, then Restart to update).': '{0} a une ancienne version de Miserecord : son stream est plus lent tant qu’il n’a pas mis à jour (Réglages, puis Redémarrer pour mettre à jour).',
     "Let friends see when I'm online": 'Montrer à mes amis quand je suis en ligne',
     'Friends and your key are kept only on this computer. Removing them means swapping codes again. Your online status goes only to your saved friends, encrypted, about once a minute.': 'Tes amis et ta clé restent uniquement sur cet ordinateur. Les retirer oblige à réééchanger les codes. Ton statut en ligne part seulement vers tes amis enregistrés, chiffré, environ une fois par minute.',
     'In-game overlay': 'Overlay en jeu',

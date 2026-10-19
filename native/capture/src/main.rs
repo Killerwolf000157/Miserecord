@@ -509,7 +509,12 @@ fn run() -> windows::core::Result<()> {
     let mut low_frames = Vec::new();
     let (mut last_low_enc, mut last_low_bytes) = (0u64, 0u64);
 
+    let mut loop_at = Instant::now();
+    let mut max_loop = 0f64; // the longest pause between two turns of this loop, ms (for the log)
+    let mut max_push = 0f64; // the longest single encoder push, ms
     while !quit.load(Ordering::Relaxed) && (args.seconds == 0 || started.elapsed() < Duration::from_secs(args.seconds)) {
+        max_loop = max_loop.max(loop_at.elapsed().as_secs_f64() * 1000.0);
+        loop_at = Instant::now();
         encoder.poll(&mut frames)?;
         for f in frames.drain(..) {
             // One output per input, in order: the oldest texture is free again.
@@ -634,6 +639,7 @@ fn run() -> windows::core::Result<()> {
             };
             if (nw, nh, f) != (ow, oh, fps) || buffer_changed {
                 let codec = encoder.codec;
+                let rebuild_started = Instant::now();
                 converter.lock().unwrap().0 = None;
                 while rx.try_recv().is_ok() {}
                 inflight.clear();
@@ -646,9 +652,17 @@ fn run() -> windows::core::Result<()> {
                     None => return Err(windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32), "encoder lost on resize")),
                 }
                 converter.lock().unwrap().0 = Some(if copy_mode { convert::Converter::copier(&gpu, nw, nh, RING)? } else { convert::Converter::new(&gpu, cw, ch, nw, nh, RING)? });
+                // A frame captured just before the switch can still have been queued
+                // after the first drain: it points at the old converter's texture and
+                // carries an old time (it went out ~2 s late, as a keyframe). Drop it.
+                let mut stale = 0;
+                while rx.try_recv().is_ok() {
+                    stale += 1;
+                }
+                *free.lock().unwrap() = (0..RING).collect();
                 interval.store(10_000_000 / f as i64, Ordering::Relaxed);
                 (ow, oh, fps) = (nw, nh, f);
-                event(format!("{{\"event\":\"resized\",\"width\":{},\"height\":{},\"fps\":{},\"copy\":{},\"bufferMs\":{}}}", ow, oh, fps, copy_mode, buffer_ms));
+                event(format!("{{\"event\":\"resized\",\"width\":{},\"height\":{},\"fps\":{},\"copy\":{},\"bufferMs\":{},\"rebuildMs\":{},\"stale\":{}}}", ow, oh, fps, copy_mode, buffer_ms, rebuild_started.elapsed().as_millis(), stale));
             }
         }
         if encoder.wants_input() {
@@ -665,7 +679,9 @@ fn run() -> windows::core::Result<()> {
                         }
                     }
                     pushes += 1;
+                    let push_at = Instant::now();
                     encoder.push(&texture, time)?;
+                    max_push = max_push.max(push_at.elapsed().as_secs_f64() * 1000.0);
                     inflight.push_back(slot);
                     pushed_at.push_back(Instant::now());
                     // An encoder that skipped a frame never answers for it: don't hold textures forever.
@@ -695,7 +711,7 @@ fn run() -> windows::core::Result<()> {
                 }
             }
             event(format!(
-                "{{\"event\":\"stats\",\"captureFps\":{:.0},\"encodeFps\":{:.0},\"mbps\":{:.1},\"dropped\":{},\"busyDrops\":{:.0},\"keyframes\":{},\"encodeMs\":{:.1},\"inFlight\":{},\"lowFps\":{:.0},\"lowMbps\":{:.2}}}",
+                "{{\"event\":\"stats\",\"captureFps\":{:.0},\"encodeFps\":{:.0},\"mbps\":{:.1},\"dropped\":{},\"busyDrops\":{:.0},\"keyframes\":{},\"encodeMs\":{:.1},\"inFlight\":{},\"lowFps\":{:.0},\"lowMbps\":{:.2},\"maxLoopMs\":{:.0},\"maxPushMs\":{:.0}}}",
                 (cap - last_cap) as f64 / secs,
                 (encoded - last_enc) as f64 / secs,
                 (bytes - last_bytes) as f64 * 8.0 / secs / 1e6,
@@ -705,8 +721,12 @@ fn run() -> windows::core::Result<()> {
                 if delay_n > 0 { delay_sum / delay_n as f64 } else { 0.0 },
                 inflight.len(),
                 low.as_ref().map(|l| (l.encoded - last_low_enc) as f64 / secs).unwrap_or(0.0),
-                low.as_ref().map(|l| (l.bytes - last_low_bytes) as f64 * 8.0 / secs / 1e6).unwrap_or(0.0)
+                low.as_ref().map(|l| (l.bytes - last_low_bytes) as f64 * 8.0 / secs / 1e6).unwrap_or(0.0),
+                max_loop,
+                max_push
             ));
+            max_loop = 0.0;
+            max_push = 0.0;
             if let Some(l) = low.as_ref() {
                 last_low_enc = l.encoded;
                 last_low_bytes = l.bytes;

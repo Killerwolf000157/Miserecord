@@ -23,6 +23,7 @@ const Native = {
       state.engineDecode = codecs;
       // People already connected learn what we can show.
       broadcast({ type: 'engine-hello', codecs });
+      for (const peer of state.peers.values()) Lanes.open(peer);
     });
     const desk = window.miserecordDesktop;
     if (!desk || !desk.engineProbe) return;
@@ -98,7 +99,7 @@ const Native = {
         }, up ? 1000 : 10000);
       },
     });
-    this.low = null; this.lowOn = null; this.lowFailed = false;
+    this.low = null; this.lowOn = null; this.lowFailed = false; this.netTicks = 0;
     for (const peer of state.peers.values()) this.addViewer(peer);
     Log.info('engine', 'native share started', { codec: info.codec, encoder: info.encoder, size: `${info.width}x${info.height}`, capture: info.capture, priority: info.priority, copy: info.copy });
     return true;
@@ -111,8 +112,7 @@ const Native = {
       return;
     }
     this.fanout.addViewer(peer, peer.engineDc);
-    Lanes.open(peer); // more lanes for the video, each with its own congestion window
-    for (const lane of peer.lanes || []) if (lane.dc.readyState === 'open') this.fanout.addLane(peer.id, lane.dc);
+    for (const dc of Lanes.ready(peer)) this.fanout.addLane(peer.id, dc); // more lanes, each with its own congestion window
     // They may have said how they show it before the share reached them.
     const view = peer.views && peer.views.get(this.streamId);
     if (view) this.fanout.setView(peer.id, view);
@@ -250,6 +250,7 @@ const Native = {
       this.chooseLayers();
       return;
     }
+    if (ev.event === 'resized') Log.info('engine', 'helper rebuilt its encoder', ev);
     if (ev.event === 'resized' && this.fanout && this.info) {
       Object.assign(this.info, { width: ev.width, height: ev.height, fps: ev.fps });
       this.fanout.reconfigure({ width: ev.width, height: ev.height });
@@ -274,11 +275,21 @@ const Native = {
         engine: `${this.info.encoder} · ${this.info.capture}`,
       };
       broadcast({ type: 'stream-stats', id: this.streamId, stats: state.sendStats });
+      // Each viewer gets its own network numbers, so the viewer's log shows the
+      // sender's side too (send me your log covers both ends).
+      const nets = {};
+      for (const peer of state.peers.values()) {
+        const net = this.fanout.viewerNet(peer.id);
+        if (!net) continue;
+        nets[peer.id.slice(0, 6)] = net;
+        sendTo(peer, { type: 'engine-net', stream: 1, encMbps: ev.mbps, capture: ev.captureFps, encoded: ev.encodeFps, level: levelName(this.level), size: `${this.info.width}x${this.info.height}`, ...net });
+      }
+      if (++this.netTicks % 5 === 0) Log.info('stats', 'native video per viewer', nets);
       if (document.querySelector('.stream-info')) refreshStreamInfo().catch(() => {});
       const pushedFps = this.lastPushed != null ? f.frames - this.lastPushed : null;
       this.lastPushed = f.frames;
       const buffered = Math.max(0, ...[...state.peers.values()].map((p) => (p.engineDc ? p.engineDc.bufferedAmount : 0)));
-      Log.info('stats', 'native video', { buffered, capture: ev.captureFps, encoded: ev.encodeFps, pushed: pushedFps, arrived: this.arrived, mbps: ev.mbps, rate: f.rate, viewers: f.viewers, skipped: f.skipped, encodeMs: ev.encodeMs });
+      Log.info('stats', 'native video', { lanes: this.fanout.lanesNow(), buffered, maxLoopMs: ev.maxLoopMs, maxPushMs: ev.maxPushMs, capture: ev.captureFps, encoded: ev.encodeFps, pushed: pushedFps, arrived: this.arrived, mbps: ev.mbps, rate: f.rate, viewers: f.viewers, skipped: f.skipped, encodeMs: ev.encodeMs });
       this.arrived = 0;
       return;
     }
@@ -343,51 +354,59 @@ async function syncEngineStreams() {
 // viewer: small peer connections with one video channel each, set up over the
 // call's own channel. Older versions don't answer and keep the one channel.
 const LANES = 9; // plus the main video channel: 10
+// The lanes are opened once per call, as soon as both sides can show native
+// streams, by one side (the impolite one, so two offers never cross), one every
+// 200 ms: opening all nine at once gathered hundreds of network candidates and
+// stalled the app's main process for ~2 s, which froze a running stream. Each
+// lane carries video both ways, so either side can share over it later.
 const Lanes = {
-  // Sharer side: open the lanes to a viewer (once per call).
-  async open(peer) {
-    peer.lanes ||= [];
-    if (peer.lanesOpening) return;
+  open(peer) {
+    if (peer.polite || peer.lanesOpening) return;
+    if (!(peer.engineDecode || []).length || !(state.engineDecode || []).length) return;
     peer.lanesOpening = true;
-    const offer = async (n) => {
-      const pc = new RTCPeerConnection({ iceServers: iceServers() });
-      const dc = Engine.channel(pc);
-      const lane = { n, pc, dc };
-      peer.lanes.push(lane);
-      dc.addEventListener('open', () => {
-        Log.info('engine', 'video lane open', { peer: peer.id.slice(0, 6), n });
-        if (Native.fanout) Native.fanout.addLane(peer.id, dc);
-      });
-      try {
-        await pc.setLocalDescription(await pc.createOffer());
-        await gathered(pc);
-        sendTo(peer, { type: 'engine-lane', n, sdp: pc.localDescription.sdp });
-      } catch (err) {
-        Log.warn('engine', 'video lane not offered', err);
-      }
+    peer.lanes ||= [];
+    let n = peer.lanes.length;
+    const next = () => {
+      if (n >= LANES || state.peers.get(peer.id) !== peer) return;
+      this.offer(peer, n++);
+      setTimeout(next, 200);
     };
-    const todo = [];
-    for (let n = peer.lanes.length; n < LANES; n++) todo.push(offer(n));
-    await Promise.all(todo);
+    next();
   },
 
-  // Sharer side: the viewer's answer.
+  async offer(peer, n) {
+    const pc = new RTCPeerConnection({ iceServers: iceServers() });
+    const dc = Engine.channel(pc);
+    const lane = { n, pc, dc };
+    peer.lanes.push(lane);
+    this.watch(peer, lane, 'offered');
+    try {
+      await pc.setLocalDescription(await pc.createOffer());
+      await gathered(pc);
+      sendTo(peer, { type: 'engine-lane', n, sdp: pc.localDescription.sdp });
+    } catch (err) {
+      Log.warn('engine', 'video lane not offered', err);
+    }
+  },
+
+  // The other side's answer to a lane we offered.
   async answered(peer, msg) {
     const lane = (peer.lanes || []).find((l) => l.n === msg.n);
     if (!lane || lane.pc.signalingState !== 'have-local-offer' || typeof msg.sdp !== 'string') return;
     try { await lane.pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp }); } catch (err) { Log.warn('engine', 'video lane answer failed', err); }
   },
 
-  // Viewer side: a lane offered by someone sharing to us.
+  // A lane the other side offered.
   async offered(peer, msg) {
     if (typeof msg.sdp !== 'string' || !(msg.n >= 0 && msg.n < 16)) return;
-    peer.lanesIn ||= new Map();
-    const old = peer.lanesIn.get(msg.n);
-    if (old) old.pc.close();
+    peer.lanes ||= [];
+    const old = peer.lanes.find((l) => l.n === msg.n);
+    if (old) { old.pc.close(); peer.lanes = peer.lanes.filter((l) => l !== old); }
     const pc = new RTCPeerConnection({ iceServers: iceServers() });
     const dc = Engine.channel(pc);
-    peer.lanesIn.set(msg.n, { pc, dc });
-    dc.addEventListener('open', () => engineReceiver(peer).addChannel(dc));
+    const lane = { n: msg.n, pc, dc };
+    peer.lanes.push(lane);
+    this.watch(peer, lane, 'answered');
     try {
       await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
       await pc.setLocalDescription(await pc.createAnswer());
@@ -398,11 +417,31 @@ const Lanes = {
     }
   },
 
+  // Once open, a lane brings their video in, and takes ours out a second later
+  // (the first packets on a lane that just opened were sometimes resent only
+  // after SCTP's timeout, ~2 s late).
+  watch(peer, lane, how) {
+    lane.pc.addEventListener('connectionstatechange', () => {
+      if (lane.pc.connectionState === 'failed') Log.warn('engine', 'video lane failed', { peer: peer.id.slice(0, 6), n: lane.n, how });
+    });
+    lane.dc.addEventListener('open', () => {
+      Log.info('engine', 'video lane open', { peer: peer.id.slice(0, 6), n: lane.n, how });
+      engineReceiver(peer).addChannel(lane.dc);
+      setTimeout(() => {
+        lane.ready = true;
+        if (Native.fanout && lane.dc.readyState === 'open') Native.fanout.addLane(peer.id, lane.dc);
+      }, 1000);
+    });
+  },
+
+  // For a share that starts (or a viewer added) after the lanes are up.
+  ready(peer) {
+    return (peer.lanes || []).filter((l) => l.ready && l.dc.readyState === 'open').map((l) => l.dc);
+  },
+
   close(peer) {
     for (const l of peer.lanes || []) l.pc.close();
-    for (const l of (peer.lanesIn || new Map()).values()) l.pc.close();
     peer.lanes = [];
-    peer.lanesIn = new Map();
     peer.lanesOpening = false;
   },
 };
@@ -417,6 +456,45 @@ function gathered(pc) {
       if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
     });
   });
+}
+
+// What arrives of each person's native stream, for the log and Stream info:
+// every 5 s while someone streams to us.
+setInterval(() => {
+  for (const peer of state.peers.values()) {
+    const rx = peer.engineRx;
+    if (!rx || !rx.streamsInfo().length) continue;
+    const st = rx.stats();
+    const now = performance.now();
+    const prev = peer.rxPrev;
+    peer.rxPrev = { bytes: st.bytes, decoded: st.decoded, t: now };
+    if (!prev) continue;
+    const secs = (now - prev.t) / 1000;
+    peer.rxNow = { mbps: +(((st.bytes - prev.bytes) * 8) / secs / 1e6).toFixed(1), fps: Math.round((st.decoded - prev.decoded) / secs), lanes: st.channels };
+    lineStats(peer).then((line) => {
+      Log.info('stats', 'native video in', { peer: peer.id.slice(0, 6), their: peer.version || 'older', ...peer.rxNow, ...line, delay: rx.streamsInfo()[0].delay, lateMs: rx.streamsInfo()[0].late, delayUps: st.delayUps, stalls: st.stalls, keyAsks: st.keyAsks, late: st.late, sender: peer.engineNet || null });
+    });
+  }
+}, 5000);
+
+// The line from this peer to us: packet loss measured on their voice (RTP
+// counts every packet, so it shows what any data on that line goes through)
+// and the round trip, since the last call.
+async function lineStats(peer) {
+  try {
+    const st = await peer.pc.getStats();
+    let lost = 0, got = 0, rtt = null;
+    st.forEach((r) => {
+      if (r.type === 'inbound-rtp' && r.kind === 'audio') { lost += r.packetsLost || 0; got += r.packetsReceived || 0; }
+      if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded' && r.currentRoundTripTime != null) rtt = Math.round(r.currentRoundTripTime * 1000);
+    });
+    const prev = peer.linePrev;
+    peer.linePrev = { lost, got };
+    const dl = prev ? lost - prev.lost : 0, dg = prev ? got - prev.got : 0;
+    return { lossPct: dl + dg > 0 ? +((100 * dl) / (dl + dg)).toFixed(2) : 0, rttMs: rtt };
+  } catch {
+    return {};
+  }
 }
 
 function engineReceiver(peer) {
@@ -457,11 +535,16 @@ function onEngineMessage(peer, msg) {
   switch (msg.type) {
     case 'engine-hello':
       peer.engineDecode = Array.isArray(msg.codecs) ? msg.codecs.filter((c) => c in Engine.CODECS) : [];
+      Lanes.open(peer); // the video lanes, ready before anyone shares
       Native.addViewer(peer); // someone joined a native share in progress
       break;
     case 'engine-config':
     case 'engine-end':
       engineReceiver(peer).onControl(msg);
+      break;
+    case 'engine-net':
+      // The sender's own numbers for us (from 2.1.3): logged with what arrives.
+      peer.engineNet = msg;
       break;
     case 'engine-lane':
       Lanes.offered(peer, msg);

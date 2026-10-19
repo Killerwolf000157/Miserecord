@@ -312,10 +312,11 @@ const Engine = (() => {
         v.full = backlog > fullAt(v) ? (v.full || 0) + 1 : 0;
         if (v.full >= 2) {
           const target = v.tput ? v.tput * 0.85 : v.rate * 0.85;
-          if (v.rate > target) v.rate = Math.max(minRate, v.tput ? v.tput * 0.7 : minRate, target);
+          if (v.rate > target) { v.rate = Math.max(minRate, v.tput ? v.tput * 0.7 : minRate, target); v.cuts = (v.cuts || 0) + 1; }
           v.calm = 0;
         } else if (backlog < calmAt(v) && using && ++v.calm >= 8) {
           v.rate = Math.min(maxRate, v.rate * 1.08);
+          v.probes = (v.probes || 0) + 1;
           v.calm = 4; // keep probing once a second while it stays calm
         }
       }
@@ -348,7 +349,24 @@ const Engine = (() => {
       return Math.max(0, ...[...viewers.values()].map((v) => waiting(v) + v.queued));
     }
 
-    return { addViewer, addLane, removeViewer, setView, setLayer, setLowWant, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
+    // Lanes open per viewer, for the log.
+    const lanesNow = () => [...viewers.values()].map((v) => lanesOpen(v));
+    // One viewer's numbers, for them and the log (Native sends them each second):
+    // the rate for them, what their line drained when full, lanes, what waits per
+    // lane, rate cuts and probes since last time, and their layer.
+    function viewerNet(id) {
+      const v = viewers.get(id);
+      if (!v) return null;
+      const out = {
+        rate: +(v.rate / 1e6).toFixed(2), tput: +((v.tput || 0) / 1e6).toFixed(2), lanes: lanesOpen(v),
+        waitingKB: v.lanes.map((d) => (d.readyState === 'open' ? Math.round(d.bufferedAmount / 1024) : -1)),
+        queuedKB: Math.round(v.queued / 1024), cuts: v.cuts || 0, probes: v.probes || 0,
+        layer: v.layer, paused: !!v.paused, delay: v.delay,
+      };
+      v.cuts = 0; v.probes = 0;
+      return out;
+    }
+    return { lanesNow, viewerNet, addViewer, addLane, removeViewer, setView, setLayer, setLowWant, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
   }
 
   // ---------------------------------------------------------------- WebCodecs sender (tests)
@@ -427,7 +445,7 @@ const Engine = (() => {
   function createReceiver({ dc, send, onTrack, onEnd, enhance = () => false }) {
     const streams = new Map(); // stream number -> state
     const st = { frames: 0, lost: 0, decoded: 0, late: 0, shown: 0 };
-    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, reordered: 0, stalls: 0, delayUps: 0, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0, enhanced: 0, enhanceMs: 0 };
+    const total = { complete: 0, lost: 0, waitedForKey: 0, keyAsks: 0, packets: 0, reordered: 0, stalls: 0, delayUps: 0, bytes: 0, channels: 1, gapN: 0, gapSum: 0, gapSq: 0, gapMax: 0, enhanced: 0, enhanceMs: 0 };
 
     function askKey(s) {
       const now = performance.now();
@@ -484,12 +502,14 @@ const Engine = (() => {
     // Packets come on the main video channel and on any extra lanes.
     function addChannel(channel) {
       channel.addEventListener('message', onPacket);
+      total.channels++;
     }
     dc.addEventListener('message', onPacket);
     function onPacket(e) {
       const p = readPacket(e.data);
       if (!p) return;
       total.packets++;
+      total.bytes += e.data.byteLength;
       const s = streams.get(p.stream);
       if (!s || !s.decoder) return; // waiting for engine-config
       if (s.next !== null && p.frame < s.next) return; // a frame already passed over
@@ -520,7 +540,18 @@ const Engine = (() => {
       if (now - s.arrAt > 3000) { s.arrBest = s.arrRecent; s.arrRecent = Infinity; s.arrAt = now; }
       s.arrRecent = Math.min(s.arrRecent, d);
       s.arrBest = Math.min(s.arrBest, d);
-      if (s.auto) noteLateness(s, d - s.arrBest, now);
+      // The first seconds of a stream are noisy (the sender just picked a screen;
+      // a frame ~2 s "late" there set a 2.5 s delay for minutes): 8 s grace.
+      s.firstAt ||= now;
+      if (s.auto && now - s.firstAt > 8000) noteLateness(s, d - s.arrBest, now);
+      // A frame that came very late: what it was, for the log (at most once a second).
+      if (d - s.arrBest > 500 && now - (s.lateLoggedAt || 0) > 1000) {
+        s.lateLoggedAt = now;
+        const bytes = f.chunks.reduce((n, c) => n + c.byteLength, 0);
+        Log.info('engine', 'frame arrived late', { lateMs: Math.round(d - s.arrBest), key: f.key, kB: Math.round(bytes / 1024), frame: no, sinceLastMs: s.lastArrival ? Math.round(now - s.lastArrival) : null, sinceStartMs: Math.round(now - s.firstAt), capturedAgoMs: s.lastTs != null ? Math.round((f.timestamp - s.lastTs) / 1000) : null });
+      }
+      s.lastArrival = now;
+      s.lastTs = f.timestamp;
       if (f.key && (s.next === null || no >= s.next)) {
         // A keyframe needs nothing before it: start over from here.
         for (const k of s.ready.keys()) if (k < no) s.ready.delete(k);
@@ -689,26 +720,28 @@ const Engine = (() => {
     // recently) is noted; the delay covers nearly all of it plus a margin, so even
     // a slow upload, a stall or a big frame shows up in time. A frame that misses
     // its moment raises the delay right away (one short pause, instead of one at
-    // every hiccup); a calm line lowers it slowly after 15 s, 20 ms every 2 s:
-    // about one frame skipped each time, which doesn't show.
+    // every hiccup), but by at most half again: one packet resent after a timeout
+    // once came 2 s late and set 2.5 s for minutes; if it keeps happening, the
+    // 99% rule raises it the rest of the way. A calm line lowers it after 15 s,
+    // 40 ms every 2 s: about two frames skipped each time, which doesn't show.
     const MAX_DELAY = 3000, AUTO_START = 1000, AUTO_MIN = 400, MARGIN = 250;
     function noteLateness(s, late, now) {
       s.lateness.push([now, late]);
       while (s.lateness.length && now - s.lateness[0][0] > 20000) s.lateness.shift();
       if (s.delay && late > s.delay - LEAD) {
-        const want = Math.min(MAX_DELAY, Math.round((late + LEAD + MARGIN) / 50) * 50);
+        const want = Math.min(MAX_DELAY, Math.round(s.delay * 1.5), Math.round((late + LEAD + MARGIN) / 50) * 50);
         if (want > s.delay) { setStreamDelay(s, want); s.raisedAt = now; total.delayUps++; }
       }
     }
 
     function tuneDelay(s) {
-      if (s.lateness.length < 60) return;
+      if (s.lateness.length < 300) return; // fewer, and the 99% point is just the worst frame
       const sorted = s.lateness.map((x) => x[1]).sort((a, b) => a - b);
       const p99 = sorted[Math.floor(sorted.length * 0.99)];
       const need = Math.max(AUTO_MIN, Math.min(MAX_DELAY, Math.round((p99 + LEAD + MARGIN) / 10) * 10));
       const now = performance.now();
       if (need > s.delay) { setStreamDelay(s, need); s.raisedAt = now; total.delayUps++; }
-      else if (need < s.delay - 100 && now - s.raisedAt > 15000) { setStreamDelay(s, Math.max(need, s.delay - 20)); s.raisedAt = now - 13000; }
+      else if (need < s.delay - 100 && now - s.raisedAt > 15000) { setStreamDelay(s, Math.max(need, s.delay - 40)); s.raisedAt = now - 13000; }
     }
 
     function setStreamDelay(s, ms) {
@@ -730,7 +763,15 @@ const Engine = (() => {
     }
 
     function streamsInfo() {
-      return [...streams.values()].map((s) => ({ number: s.number, id: s.config && String(s.config.id), target: s.target, delay: s.delay, auto: s.auto }));
+      return [...streams.values()].map((s) => ({ number: s.number, id: s.config && String(s.config.id), target: s.target, delay: s.delay, auto: s.auto, late: lateSummary(s) }));
+    }
+
+    // How late frames got here over the last 20 s (ms past the quickest), for the log.
+    function lateSummary(s) {
+      if (!s.lateness.length) return null;
+      const v = s.lateness.map((x) => x[1]).sort((a, b) => a - b);
+      const at = (q) => Math.round(v[Math.min(v.length - 1, Math.floor(v.length * q))]);
+      return { p50: at(0.5), p99: at(0.99), max: Math.round(v[v.length - 1]), n: v.length };
     }
 
     return { onControl, stop, setTargetDelay, setDelay, streamsInfo, addChannel, stats: () => ({ ...st, ...total }) };

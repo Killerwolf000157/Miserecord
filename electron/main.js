@@ -378,6 +378,13 @@ function setupScreenPicker(ses) {
     send('pick-source', { id, sources: null, canShareAudio: process.platform === 'win32' });
     try {
       update(await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 }, fetchWindowIcons: true }));
+      // Thumbnails: screens first (quick), then windows. Grabbing window thumbnails
+      // blocks this process for ~2 s; picked before it started, it ran anyway and
+      // froze a share that had just begun. So it's skipped once you've picked.
+      if (answered) return;
+      const screens = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 320, height: 180 } });
+      if (answered) return;
+      update(sources.map((s) => screens.find((x) => x.id === s.id) || s));
       if (answered) return;
       update(await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true }));
     } catch (err) {

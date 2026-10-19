@@ -228,18 +228,29 @@ function toggleStreamInfo(tileEl) {
   refreshStreamInfo();
 }
 
-// How far behind live a native stream plays here (stream delay), for Stream info.
+// How far behind live a native stream plays here (stream delay), and what
+// arrives of it, for Stream info.
 function streamDelayText(tile) {
+  return nativeInfo(tile).delay;
+}
+
+function nativeInfo(tile) {
   for (const peer of state.peers.values()) {
     if (!peer.engineRx) continue;
     for (const info of peer.engineRx.streamsInfo()) {
       const entry = peer.remote.get(info.id);
       if (!entry || !entry.tile || entry.tile.el !== tile) continue;
       const secs = I18n.t('{0} s behind', ((info.delay || 0) / 1000).toFixed(1));
-      return info.auto ? `${secs} (${I18n.t('automatic')})` : secs;
+      const n = peer.rxNow;
+      return {
+        delay: info.auto ? `${secs} (${I18n.t('automatic')})` : secs,
+        recv: n ? `${n.mbps} Mbps · ${n.fps} fps · ${I18n.t('{0} lanes', n.lanes)}` : '',
+        // Lanes and the small layer need the sender on 2.1.2 or later.
+        old: !peer.version || versionBelow(peer.version, '2.1.2') ? I18n.t('{0} has an older Miserecord: their stream is slower until they update (Settings, then Restart to update).', peer.name) : '',
+      };
     }
   }
-  return '';
+  return { delay: '', recv: '', old: '' };
 }
 
 // Fill every open Stream info box: what the sender reports, and what arrives here.
@@ -281,7 +292,10 @@ async function refreshStreamInfo() {
     } else {
       lines.push(I18n.t('Waiting for numbers from the sender…'));
     }
+    const native = tile.classList.contains('remote') ? nativeInfo(tile) : { recv: '', old: '' };
     if (recv) lines.push(`<b>${I18n.t('Receiving')}</b> ${recv}`);
+    else if (native.recv) lines.push(`<b>${I18n.t('Receiving')}</b> ${native.recv}`);
+    if (native.old) lines.push(`<span class="si-bandwidth">${native.old}</span>`);
     if (delayLine) lines.push(`<b>${I18n.t('Delay')}</b> ${delayLine}`);
     box.innerHTML = lines.map((l) => `<div>${l}</div>`).join('');
   }
