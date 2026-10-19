@@ -994,5 +994,5 @@ select.native-select { display: none !important; }
 .stream-info b { font-weight: 600; color: rgba(255, 255, 255, .7); margin-right: 4px; }
 .stream-info .si-ok { color: #8EE3C8; }
 .stream-info .si-still { color: rgba(255, 255, 255, .7); }
-.stream-info .si-capture, .stream-info .si-encoder, .stream-info .si-bandwidth { color: #FFB77A; }
+.stream-info .si-capture, .stream-info .si-encoder, .stream-info .si-gpu, .stream-info .si-bandwidth { color: #FFB77A; }
 .row-value.specs { font-size: 13px; color: var(--text-2); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }

@@ -183,6 +183,7 @@ const I18n = (() => {
     'Little is moving, so few frames are needed': 'Peu de mouvement, donc peu d’images à envoyer',
     'Windows is handing over few frames: the game is probably using the whole graphics card': 'Windows fournit peu d’images : le jeu utilise sans doute toute la carte graphique',
     "The encoder can't keep up": 'L’encodeur ne suit pas',
+    'The graphics card is fully busy (usually the game), so some frames are skipped': 'La carte graphique est à fond (en général le jeu), donc quelques images sont sautées',
     "The sender's upload is too slow for this size": 'L’envoi de l’autre côté est trop lent pour cette taille',
     "Your stream was struggling, so it's now {0}.": 'Ton stream ramait, il passe donc en {0}.',
     "Windows is handing over few frames, usually because the game uses the whole graphics card. Capping the game's frame rate (V-Sync, or 120 fps) frees room for your stream.": 'Windows fournit peu d’images, en général parce que le jeu utilise toute la carte graphique. Limiter les FPS du jeu (V-Sync ou 120 i/s) laisse de la place à ton stream.',

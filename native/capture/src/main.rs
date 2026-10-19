@@ -163,7 +163,7 @@ fn replay(args: &Args, dir: &str) -> windows::core::Result<()> {
     let codec = args.codec.unwrap_or(Codec::H264);
     let (ew, eh) = args.scale.unwrap_or((w, h));
     let scaler = if (ew, eh) != (w, h) { Some(convert::Converter::with_input(&gpu, w, h, ew, eh, RING, true)?) } else { None };
-    let Some(mut encoder) = Encoder::new(&gpu, codec, ew, eh, fps, args.bitrate)? else {
+    let Some(mut encoder) = Encoder::new(&gpu, codec, ew, eh, fps, args.bitrate, false)? else {
         return Err(windows::core::Error::new(windows::core::HRESULT(0x80004001u32 as i32), "no encoder"));
     };
     let desc = D3D11_TEXTURE2D_DESC {
@@ -210,7 +210,7 @@ fn replay(args: &Args, dir: &str) -> windows::core::Result<()> {
             match &scaler {
                 Some(s) => {
                     s.convert(tex, w, h, next % RING)?;
-                    encoder.push(&s.targets[next % RING].0, next as i64 * interval)?;
+                    encoder.push(&s.targets[next % RING], next as i64 * interval)?;
                 }
                 None => encoder.push(tex, next as i64 * interval)?,
             }
@@ -238,6 +238,13 @@ fn run() -> windows::core::Result<()> {
         RoInitialize(RO_INIT_MULTITHREADED)?;
         MFStartup(MF_VERSION, MFSTARTUP_FULL)?;
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+    if std::env::args().any(|a| a == "--formats") {
+        let gpu = gpu::create()?;
+        for c in encode::available(&gpu) {
+            println!("{}: {:?}", c.name(), encode::input_formats(&gpu, c)?);
+        }
+        return Ok(());
     }
     if args.probe {
         let gpu = gpu::create()?;
@@ -302,10 +309,22 @@ fn run() -> windows::core::Result<()> {
         Some(c) => vec![c, Codec::H264, Codec::Av1],
         None => vec![Codec::Av1, Codec::H264],
     };
+    // Copy mode (see convert.rs) when a monitor is streamed at its own size and the
+    // encoder takes BGRA. MR_COPY=0 turns it off, for comparisons.
+    let copy_ok = |codec: Codec, w: u32, h: u32| {
+        duplicate.is_some()
+            && (w, h) == (cw, ch)
+            && args.dump.is_none()
+            && std::env::var("MR_COPY").map(|v| v != "0").unwrap_or(true)
+            && encode::input_formats(&gpu, codec).map(|f| f.iter().any(|x| x == "ARGB32")).unwrap_or(false)
+    };
     let mut encoder = None;
+    let mut copy_mode = false;
     for c in order {
-        if let Some(e) = Encoder::new(&gpu, c, ow, oh, args.fps, args.bitrate)? {
+        let direct = copy_ok(c, ow, oh);
+        if let Some(e) = Encoder::new(&gpu, c, ow, oh, args.fps, args.bitrate, direct)? {
             encoder = Some(e);
+            copy_mode = direct;
             break;
         }
     }
@@ -315,7 +334,7 @@ fn run() -> windows::core::Result<()> {
 
     // Swapped for a new one when the stream changes size; capture skips frames meanwhile.
     let converter: Arc<Mutex<Sendable<Option<convert::Converter>>>> =
-        Arc::new(Mutex::new(Sendable(Some(convert::Converter::new(&gpu, cw, ch, ow, oh, RING)?))));
+        Arc::new(Mutex::new(Sendable(Some(if copy_mode { convert::Converter::copier(&gpu, ow, oh, RING)? } else { convert::Converter::new(&gpu, cw, ch, ow, oh, RING)? }))));
     let free: Arc<Mutex<VecDeque<usize>>> = Arc::new(Mutex::new((0..RING).collect()));
     let (tx, rx) = mpsc::channel::<(usize, i64)>();
     let captured = Arc::new(AtomicU64::new(0));
@@ -366,8 +385,8 @@ fn run() -> windows::core::Result<()> {
     }
 
     event(format!(
-        "{{\"event\":\"ready\",\"codec\":\"{}\",\"encoder\":\"{}\",\"adapter\":\"{}\",\"capture\":\"{}\",\"width\":{},\"height\":{},\"fps\":{},\"priority\":\"{}\",\"refused\":\"{}\"}}",
-        encoder.codec.name(), esc(&encoder.name), esc(&gpu.name), if duplicate.is_some() { "desktop duplication" } else { "graphics capture" }, ow, oh, args.fps, priority, encoder.refused
+        "{{\"event\":\"ready\",\"codec\":\"{}\",\"encoder\":\"{}\",\"adapter\":\"{}\",\"capture\":\"{}\",\"width\":{},\"height\":{},\"fps\":{},\"priority\":\"{}\",\"refused\":\"{}\",\"copy\":{}}}",
+        encoder.codec.name(), esc(&encoder.name), esc(&gpu.name), if duplicate.is_some() { "desktop duplication" } else { "graphics capture" }, ow, oh, args.fps, priority, encoder.refused, copy_mode
     ));
 
     // Control from the app on stdin.
@@ -412,7 +431,7 @@ fn run() -> windows::core::Result<()> {
     let mut first_time: Option<i64> = None;
     let (mut encoded, mut bytes, mut keys) = (0u64, 0u64, 0u64);
     let mut last_stats = Instant::now();
-    let (mut last_cap, mut last_enc, mut last_bytes) = (0u64, 0u64, 0u64);
+    let (mut last_cap, mut last_enc, mut last_bytes, mut last_drop) = (0u64, 0u64, 0u64, 0u64);
 
     while !quit.load(Ordering::Relaxed) && (args.seconds == 0 || started.elapsed() < Duration::from_secs(args.seconds)) {
         encoder.poll(&mut frames)?;
@@ -461,21 +480,22 @@ fn run() -> windows::core::Result<()> {
                 pushed_at.clear();
                 *free.lock().unwrap() = (0..RING).collect();
                 encoder.finish();
-                match Encoder::new(&gpu, codec, nw, nh, f, commanded)? {
+                copy_mode = copy_ok(codec, nw, nh);
+                match Encoder::new(&gpu, codec, nw, nh, f, commanded, copy_mode)? {
                     Some(e) => encoder = e,
                     None => return Err(windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32), "encoder lost on resize")),
                 }
-                converter.lock().unwrap().0 = Some(convert::Converter::new(&gpu, cw, ch, nw, nh, RING)?);
+                converter.lock().unwrap().0 = Some(if copy_mode { convert::Converter::copier(&gpu, nw, nh, RING)? } else { convert::Converter::new(&gpu, cw, ch, nw, nh, RING)? });
                 interval.store(10_000_000 / f as i64, Ordering::Relaxed);
                 (ow, oh, fps) = (nw, nh, f);
-                event(format!("{{\"event\":\"resized\",\"width\":{},\"height\":{},\"fps\":{}}}", ow, oh, fps));
+                event(format!("{{\"event\":\"resized\",\"width\":{},\"height\":{},\"fps\":{},\"copy\":{}}}", ow, oh, fps, copy_mode));
             }
         }
         if encoder.wants_input() {
             match rx.recv_timeout(Duration::from_millis(2)) {
                 Ok((slot, time)) => {
                     let texture = match converter.lock().unwrap().0.as_ref() {
-                        Some(c) => c.targets[slot].0.clone(),
+                        Some(c) => c.targets[slot].clone(),
                         None => continue,
                     };
                     if let Some(dir) = &args.dump {
@@ -515,11 +535,12 @@ fn run() -> windows::core::Result<()> {
                 }
             }
             event(format!(
-                "{{\"event\":\"stats\",\"captureFps\":{:.0},\"encodeFps\":{:.0},\"mbps\":{:.1},\"dropped\":{},\"keyframes\":{},\"encodeMs\":{:.1},\"inFlight\":{}}}",
+                "{{\"event\":\"stats\",\"captureFps\":{:.0},\"encodeFps\":{:.0},\"mbps\":{:.1},\"dropped\":{},\"busyDrops\":{:.0},\"keyframes\":{},\"encodeMs\":{:.1},\"inFlight\":{}}}",
                 (cap - last_cap) as f64 / secs,
                 (encoded - last_enc) as f64 / secs,
                 (bytes - last_bytes) as f64 * 8.0 / secs / 1e6,
                 dropped.load(Ordering::Relaxed),
+                (dropped.load(Ordering::Relaxed) - last_drop) as f64 / secs,
                 keys,
                 if delay_n > 0 { delay_sum / delay_n as f64 } else { 0.0 },
                 inflight.len()
@@ -527,6 +548,7 @@ fn run() -> windows::core::Result<()> {
             delay_sum = 0.0;
             delay_n = 0;
             last_cap = cap;
+            last_drop = dropped.load(Ordering::Relaxed);
             last_enc = encoded;
             last_bytes = bytes;
             last_stats = Instant::now();

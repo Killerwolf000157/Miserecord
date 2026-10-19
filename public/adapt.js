@@ -215,6 +215,7 @@ const DIAGNOSIS = {
   still: 'Little is moving, so few frames are needed',
   capture: 'Windows is handing over few frames: the game is probably using the whole graphics card',
   encoder: "The encoder can't keep up",
+  gpu: 'The graphics card is fully busy (usually the game), so some frames are skipped',
   bandwidth: "The sender's upload is too slow for this size",
 };
 

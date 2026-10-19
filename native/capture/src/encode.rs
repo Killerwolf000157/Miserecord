@@ -103,12 +103,43 @@ pub fn available(gpu: &Gpu) -> Vec<Codec> {
     [Codec::Av1, Codec::H264].into_iter().filter(|c| matches!(find(gpu, *c), Ok(Some(_)))).collect()
 }
 
+/// Test: the input pixel formats this card's encoder for a codec accepts.
+pub fn input_formats(gpu: &Gpu, codec: Codec) -> Result<Vec<String>> {
+    let Some((activate, _)) = find(gpu, codec)? else { return Ok(vec![]) };
+    unsafe {
+        let mft: IMFTransform = activate.ActivateObject()?;
+        let _ = mft.GetAttributes()?.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1);
+        let output = MFCreateMediaType()?;
+        output.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+        output.SetGUID(&MF_MT_SUBTYPE, &codec.subtype())?;
+        output.SetUINT32(&MF_MT_AVG_BITRATE, 8_000_000)?;
+        output.SetUINT64(&MF_MT_FRAME_SIZE, pack(1920, 1080))?;
+        output.SetUINT64(&MF_MT_FRAME_RATE, pack(60, 1))?;
+        output.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+        mft.SetOutputType(0, &output, 0)?;
+        let names = [
+            (MFVideoFormat_NV12, "NV12"), (MFVideoFormat_ARGB32, "ARGB32"), (MFVideoFormat_RGB32, "RGB32"),
+            (MFVideoFormat_AYUV, "AYUV"), (MFVideoFormat_YUY2, "YUY2"), (MFVideoFormat_IYUV, "IYUV"),
+            (MFVideoFormat_P010, "P010"), (MFVideoFormat_A2R10G10B10, "A2R10G10B10"),
+        ];
+        let mut out = Vec::new();
+        let mut i = 0;
+        while let Ok(t) = mft.GetInputAvailableType(0, i) {
+            let sub = t.GetGUID(&MF_MT_SUBTYPE)?;
+            out.push(names.iter().find(|(g, _)| *g == sub).map(|(_, n)| n.to_string()).unwrap_or(format!("{sub:?}")));
+            i += 1;
+        }
+        Ok(out)
+    }
+}
+
 fn pack(hi: u32, lo: u32) -> u64 {
     ((hi as u64) << 32) | lo as u64
 }
 
 impl Encoder {
-    pub fn new(gpu: &Gpu, codec: Codec, width: u32, height: u32, fps: u32, bitrate: u32) -> Result<Option<Encoder>> {
+    /// argb: the input is BGRA frames (copy mode) instead of NV12.
+    pub fn new(gpu: &Gpu, codec: Codec, width: u32, height: u32, fps: u32, bitrate: u32, argb: bool) -> Result<Option<Encoder>> {
         let Some((activate, name)) = find(gpu, codec)? else { return Ok(None) };
         unsafe {
             let mft: IMFTransform = activate.ActivateObject()?;
@@ -176,7 +207,7 @@ impl Encoder {
 
             let input = MFCreateMediaType()?;
             input.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            input.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+            input.SetGUID(&MF_MT_SUBTYPE, if argb { &MFVideoFormat_ARGB32 } else { &MFVideoFormat_NV12 })?;
             input.SetUINT64(&MF_MT_FRAME_SIZE, pack(width, height))?;
             input.SetUINT64(&MF_MT_FRAME_RATE, pack(fps, 1))?;
             input.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pack(1, 1))?;

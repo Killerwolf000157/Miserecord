@@ -77,7 +77,7 @@ const Native = {
       wantKey: () => desk.engineControl('key'),
     });
     for (const peer of state.peers.values()) this.addViewer(peer);
-    Log.info('engine', 'native share started', { codec: info.codec, encoder: info.encoder, size: `${info.width}x${info.height}`, capture: info.capture, priority: info.priority });
+    Log.info('engine', 'native share started', { codec: info.codec, encoder: info.encoder, size: `${info.width}x${info.height}`, capture: info.capture, priority: info.priority, copy: info.copy });
     return true;
   },
 
@@ -116,8 +116,16 @@ const Native = {
     const fps = LEVELS[this.level].fps;
     const need = LEVELS[this.level].mbps * 1e6;
     const starved = rate < need * 0.6;
-    const slowEncoder = ev.captureFps >= fps * 0.8 && ev.encodeFps < fps * 0.75;
-    this.diagnosis = starved ? 'bandwidth' : slowEncoder ? 'encoder' : ev.encodeFps >= fps * 0.85 ? 'ok' : 'still';
+    // Behind only when the helper really skipped frames because every texture was
+    // still waiting on the graphics card (busyDrops), two seconds running: a gap
+    // between captured and encoded counts alone also happens for a second after
+    // each size change and isn't a problem. The encoder chip itself is rarely the
+    // limit; a game holding the whole graphics card is.
+    const busy = typeof ev.busyDrops === 'number' ? ev.busyDrops >= fps * 0.1 : ev.captureFps >= fps * 0.8 && ev.encodeFps < fps * 0.75;
+    const settled = now - this.changedAt > 2000;
+    this.busySecs = busy && settled ? (this.busySecs || 0) + 1 : 0;
+    const slowEncoder = this.busySecs >= 2;
+    this.diagnosis = starved ? 'bandwidth' : slowEncoder ? 'gpu' : ev.encodeFps >= fps * 0.85 ? 'ok' : 'still';
     this.bad = starved ? this.bad + 1 : 0;
     this.slow = slowEncoder ? this.slow + 1 : 0;
     const roomUp = this.level > this.ceiling && rate >= LEVELS[this.level - 1].mbps * 1e6 * 1.25;
@@ -125,7 +133,7 @@ const Native = {
     if (now - this.changedAt < 6000) return;
     if ((this.bad >= 3 || this.slow >= 4) && this.level < LEVELS.length - 1) {
       if (this.upAt && now - this.upAt < 20000) this.holdUp = true;
-      this.setLevel(this.level + 1, this.bad >= 3 ? `only ${(rate / 1e6).toFixed(1)} Mbps gets through` : 'the encoder is behind');
+      this.setLevel(this.level + 1, this.bad >= 3 ? `only ${(rate / 1e6).toFixed(1)} Mbps gets through` : 'the graphics card is busy');
     } else if (this.good >= 15 && !this.holdUp) {
       this.upAt = now;
       this.setLevel(this.level - 1, 'room for more');

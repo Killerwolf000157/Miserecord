@@ -30,6 +30,12 @@ streaming moves to native code.
   textures through an `IMFDXGIDeviceManager`. AV1 where the card has it (RTX 40,
   RX 7000, Arc), otherwise HEVC or H.264. Low-latency mode, CBR-ish, no B-frames,
   periodic intra refresh plus keyframes on request.
+- **Convert**: the GPU's video processor turns BGRA into NV12 and scales. When a
+  monitor streams at its own size and the encoder takes BGRA itself (NVIDIA's do),
+  frames are only copied instead (copy mode), leaving more of a busy graphics card
+  to the game. The helper reports frames skipped because every texture was still
+  waiting on the card (`busyDrops`); Stream info blames the busy card, not the
+  encoder, when that lasts.
 - **Transport**: the call's existing peer-to-peer connection (DTLS encrypted),
   a second data channel `video`, reliable but unordered (partly reliable modes
   lost ~40% of frames between two apps). Packets are paced at 3x the bitrate so
