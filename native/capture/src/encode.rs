@@ -51,7 +51,15 @@ pub struct Encoder {
     pub name: String,
     pub refused: String, // encoder settings this encoder didn't take
     fps: u32,
+    buffer_ms: u32,
     pending_inputs: u32, // how many METransformNeedInput we owe
+}
+
+/// The encoder's rate buffer (bits): half a second live; with a stream delay, 80%
+/// of it (the rest covers the line's own ups and downs), at most 3 s.
+fn buffer_bits(bitrate: u32, buffer_ms: u32) -> u32 {
+    let ms = if buffer_ms == 0 { 500 } else { (buffer_ms * 4 / 5).clamp(500, 3000) };
+    ((bitrate as u64 * ms as u64) / 1000).min(u32::MAX as u64) as u32
 }
 
 /// The first hardware encoder for this codec on our graphics card, and its name.
@@ -139,7 +147,8 @@ fn pack(hi: u32, lo: u32) -> u64 {
 
 impl Encoder {
     /// argb: the input is BGRA frames (copy mode) instead of NV12.
-    pub fn new(gpu: &Gpu, codec: Codec, width: u32, height: u32, fps: u32, bitrate: u32, argb: bool) -> Result<Option<Encoder>> {
+    /// buffer_ms: how long the viewers wait anyway (their stream delay), 0 for live.
+    pub fn new(gpu: &Gpu, codec: Codec, width: u32, height: u32, fps: u32, bitrate: u32, argb: bool, buffer_ms: u32) -> Result<Option<Encoder>> {
         let Some((activate, name)) = find(gpu, codec)? else { return Ok(None) };
         unsafe {
             let mft: IMFTransform = activate.ActivateObject()?;
@@ -176,8 +185,10 @@ impl Encoder {
                     (&CODECAPI_AVEncCommonRateControlMode, VARIANT::from(rc), "rate control"),
                     (&CODECAPI_AVEncCommonMeanBitRate, VARIANT::from(bitrate), "bitrate"),
                     (&CODECAPI_AVEncCommonMaxBitRate, VARIANT::from(bitrate), "max bitrate"),
-                    // Half a second of buffer: steady enough for the line, small enough for low delay.
-                    (&CODECAPI_AVEncCommonBufferSize, VARIANT::from(bitrate / 2), "buffer"),
+                    // Half a second of buffer for live viewers: steady enough for the line,
+                    // small enough for low delay. Viewers with a stream delay leave room for
+                    // more: busy moments can take bits from calm ones (see buffer_bits).
+                    (&CODECAPI_AVEncCommonBufferSize, VARIANT::from(buffer_bits(bitrate, buffer_ms)), "buffer"),
                     // A keyframe every 10 s: on a slow upload each one is a hiccup, and lost
                     // pictures are healed by keyframes on request anyway.
                     (&CODECAPI_AVEncMPVGOPSize, VARIANT::from(fps * 10), "gop"),
@@ -217,7 +228,7 @@ impl Encoder {
             let events: IMFMediaEventGenerator = mft.cast()?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-            Ok(Some(Encoder { mft, events, api, _manager: manager, codec, name, refused: refused.join(", "), fps, pending_inputs: 0 }))
+            Ok(Some(Encoder { mft, events, api, _manager: manager, codec, name, refused: refused.join(", "), fps, buffer_ms, pending_inputs: 0 }))
         }
     }
 
@@ -226,6 +237,7 @@ impl Encoder {
             unsafe {
                 let _ = api.SetValue(&CODECAPI_AVEncCommonMeanBitRate, &VARIANT::from(bitrate));
                 let _ = api.SetValue(&CODECAPI_AVEncCommonMaxBitRate, &VARIANT::from(bitrate));
+                let _ = api.SetValue(&CODECAPI_AVEncCommonBufferSize, &VARIANT::from(buffer_bits(bitrate, self.buffer_ms)));
             }
         }
     }

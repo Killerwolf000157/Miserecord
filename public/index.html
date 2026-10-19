@@ -502,6 +502,13 @@
           <label class="row"><span class="row-label">Adjust automatically when a stream struggles</span><input type="checkbox" class="switch" id="sAdaptive"></label>
           <label class="row"><span class="row-label">Native streaming engine (beta)</span><input type="checkbox" class="switch" id="sEngine"></label>
           <label class="row"><span class="row-label">Sharpen and upscale streams I watch</span><input type="checkbox" class="switch" id="sEnhance"></label>
+          <label class="row"><span class="row-label">Streams I watch</span>
+            <select id="sStreamDelay">
+              <option value="0">Live, no delay</option>
+              <option value="1000">1 second behind, smoother</option>
+              <option value="1500">1.5 seconds behind, smoother and sharper</option>
+              <option value="2000">2 seconds behind, smoothest</option>
+            </select></label>
           <div class="row"><span class="row-label">This computer</span><span class="row-value specs" id="sSpecs" translate="no"></span></div>
         </div>
         <p class="group-note" id="sSpecsNote">Miserecord looks at your graphics card, processor and memory on this computer only, to choose where a screen share starts. While you share, it lowers the size or frame rate when the stream can't keep up, and raises it again when it can. Right-click a stream to see why it stutters.</p>

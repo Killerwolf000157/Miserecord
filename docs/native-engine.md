@@ -30,6 +30,13 @@ streaming moves to native code.
   textures through an `IMFDXGIDeviceManager`. AV1 where the card has it (RTX 40,
   RX 7000, Arc), otherwise HEVC or H.264. Low-latency mode, CBR-ish, no B-frames,
   periodic intra refresh plus keyframes on request.
+- **Stream delay** (viewer setting, 1.5 s by default, or live): the viewer holds
+  frames, still compressed, until shortly before they're due, and the stream's
+  sound waits as long (`jitterBufferTarget`). Stalls on the line and resends are
+  absorbed instead of freezing the picture. The viewer tells the sender
+  (`engine-delay`): the sender lets data wait up to half that delay before
+  calling the line full, and the helper's rate buffer grows to 80% of the least
+  delayed viewer's delay (`buffer MS`), so busy moments can take bits from calm ones.
 - **Convert**: the GPU's video processor turns BGRA into NV12 and scales. When a
   monitor streams at its own size and the encoder takes BGRA itself (NVIDIA's do),
   frames are only copied instead (copy mode), leaving more of a busy graphics card

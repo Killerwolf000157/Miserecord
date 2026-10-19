@@ -75,6 +75,13 @@ const Native = {
       sendTo,
       setRate: (bps) => desk.engineControl(`bitrate ${bps}`),
       wantKey: () => desk.engineControl('key'),
+      // Every viewer waits this long anyway: the encoder may spread bits over it.
+      // Settled for a second first: a viewer joining says its delay right after, and
+      // each change restarts the encoder.
+      onDelay: (ms) => {
+        clearTimeout(this.delayTimer);
+        this.delayTimer = setTimeout(() => { desk.engineControl(`buffer ${ms}`); Log.info('engine', 'viewers delay', { ms }); }, 1000);
+      },
     });
     for (const peer of state.peers.values()) this.addViewer(peer);
     Log.info('engine', 'native share started', { codec: info.codec, encoder: info.encoder, size: `${info.width}x${info.height}`, capture: info.capture, priority: info.priority, copy: info.copy });
@@ -99,6 +106,7 @@ const Native = {
     this.fanout = null;
     this.info = null;
     this.streamId = null;
+    clearTimeout(this.delayTimer);
     const desk = window.miserecordDesktop;
     if (desk && desk.engineStop) desk.engineStop();
   },
@@ -197,6 +205,9 @@ const Native = {
 async function syncEngineStreams() {
   for (const peer of state.peers.values()) {
     if (!peer.engineRx || peer.pc.connectionState !== 'connected') continue;
+    // Stream delay (settings): frames are held back this long, and so is the sound.
+    const delay = Math.max(0, Math.min(3000, Number(settings.streamDelay) || 0));
+    peer.engineRx.setDelay(delay);
     const list = peer.engineRx.streamsInfo();
     if (!list.length) continue;
     const stats = await peer.pc.getStats().catch(() => null);
@@ -204,6 +215,12 @@ async function syncEngineStreams() {
       const entry = peer.remote.get(info.id);
       const audio = entry && entry.stream.getAudioTracks()[0];
       let target = 50;
+      if (audio) {
+        const rx = peer.pc.getReceivers().find((r) => r.track && r.track.id === audio.id);
+        if (rx && 'jitterBufferTarget' in rx && rx.jitterBufferTarget !== delay) {
+          try { rx.jitterBufferTarget = delay; } catch { /* not supported */ }
+        }
+      }
       if (audio && stats) {
         stats.forEach((r) => {
           if (r.type !== 'inbound-rtp' || r.kind !== 'audio' || r.trackIdentifier !== audio.id) return;
@@ -217,7 +234,8 @@ async function syncEngineStreams() {
           }
         });
       }
-      peer.engineRx.setTargetDelay(info.number, target);
+      // The held frames already wait (delay - 100 ms) of it.
+      peer.engineRx.setTargetDelay(info.number, delay ? target - (delay - 100) : target);
     }
   }
 }
@@ -268,6 +286,7 @@ function onEngineMessage(peer, msg) {
       break;
     case 'engine-feedback':
     case 'engine-keyframe':
+    case 'engine-delay':
       if (Native.fanout) Native.fanout.onControl(peer, msg);
       break;
   }

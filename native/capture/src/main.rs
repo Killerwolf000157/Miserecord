@@ -46,6 +46,7 @@ struct Args {
     fps: u32,
     bitrate: u32,
     seconds: u64,
+    buffer: u32, // ms the viewers wait anyway (stream delay), 0 = live
     out: Option<String>,
     dump: Option<String>, // test: save the Y plane of frames 60..60+N as they enter the encoder
     dump_frames: usize,
@@ -63,6 +64,7 @@ fn parse() -> Args {
         fps: 60,
         bitrate: 8_000_000,
         seconds: 0,
+        buffer: 0,
         out: None,
         dump: None,
         dump_frames: 90,
@@ -96,6 +98,7 @@ fn parse() -> Args {
             "--fps" => a.fps = v().parse::<u32>().unwrap_or(60).clamp(1, 240),
             "--bitrate" => a.bitrate = v().parse().unwrap_or(8_000_000),
             "--seconds" => a.seconds = v().parse().unwrap_or(0),
+            "--buffer" => a.buffer = v().parse::<u32>().unwrap_or(0).min(3000),
             "--out" => a.out = Some(v()),
             "--dump" => a.dump = Some(v()),
             "--dump-frames" => a.dump_frames = v().parse().unwrap_or(90),
@@ -163,7 +166,7 @@ fn replay(args: &Args, dir: &str) -> windows::core::Result<()> {
     let codec = args.codec.unwrap_or(Codec::H264);
     let (ew, eh) = args.scale.unwrap_or((w, h));
     let scaler = if (ew, eh) != (w, h) { Some(convert::Converter::with_input(&gpu, w, h, ew, eh, RING, true)?) } else { None };
-    let Some(mut encoder) = Encoder::new(&gpu, codec, ew, eh, fps, args.bitrate, false)? else {
+    let Some(mut encoder) = Encoder::new(&gpu, codec, ew, eh, fps, args.bitrate, false, args.buffer)? else {
         return Err(windows::core::Error::new(windows::core::HRESULT(0x80004001u32 as i32), "no encoder"));
     };
     let desc = D3D11_TEXTURE2D_DESC {
@@ -318,11 +321,12 @@ fn run() -> windows::core::Result<()> {
             && std::env::var("MR_COPY").map(|v| v != "0").unwrap_or(true)
             && encode::input_formats(&gpu, codec).map(|f| f.iter().any(|x| x == "ARGB32")).unwrap_or(false)
     };
+    let mut buffer_ms = args.buffer;
     let mut encoder = None;
     let mut copy_mode = false;
     for c in order {
         let direct = copy_ok(c, ow, oh);
-        if let Some(e) = Encoder::new(&gpu, c, ow, oh, args.fps, args.bitrate, direct)? {
+        if let Some(e) = Encoder::new(&gpu, c, ow, oh, args.fps, args.bitrate, direct, buffer_ms)? {
             encoder = Some(e);
             copy_mode = direct;
             break;
@@ -394,8 +398,9 @@ fn run() -> windows::core::Result<()> {
     let want_key = Arc::new(AtomicBool::new(false));
     let new_rate = Arc::new(AtomicU32::new(0));
     let new_size: Arc<Mutex<Option<(u32, u32, u32)>>> = Arc::new(Mutex::new(None));
+    let new_buffer = Arc::new(AtomicU32::new(u32::MAX));
     {
-        let (quit, want_key, new_rate, new_size) = (quit.clone(), want_key.clone(), new_rate.clone(), new_size.clone());
+        let (quit, want_key, new_rate, new_size, new_buffer) = (quit.clone(), want_key.clone(), new_rate.clone(), new_size.clone(), new_buffer.clone());
         std::thread::spawn(move || {
             for line in std::io::stdin().lock().lines() {
                 let Ok(line) = line else { break };
@@ -403,6 +408,11 @@ fn run() -> windows::core::Result<()> {
                 match parts.next() {
                     Some("key") => want_key.store(true, Ordering::Relaxed),
                     Some("bitrate") => new_rate.store(parts.next().and_then(|v| v.parse().ok()).unwrap_or(0), Ordering::Relaxed),
+                    Some("buffer") => {
+                        if let Some(ms) = parts.next().and_then(|v| v.parse::<u32>().ok()) {
+                            new_buffer.store(ms.min(3000), Ordering::Relaxed);
+                        }
+                    }
                     Some("size") => {
                         let n: Vec<u32> = parts.filter_map(|v| v.parse().ok()).collect();
                         if n.len() == 3 && n[0] >= 160 && n[1] >= 90 && n[2] >= 1 {
@@ -468,11 +478,19 @@ fn run() -> windows::core::Result<()> {
             commanded = (bitrate as f64 / overshoot) as u32;
             encoder.set_bitrate(commanded);
         }
-        // A new size or frame rate: a fresh converter and encoder, then a keyframe.
+        // A new size, frame rate or rate buffer: a fresh converter and encoder, then a keyframe.
         let resize = new_size.lock().unwrap().take();
-        if let Some((w, h, f)) = resize {
-            let (nw, nh) = fit(w, h);
-            if (nw, nh, f) != (ow, oh, fps) {
+        let buffer = new_buffer.swap(u32::MAX, Ordering::Relaxed);
+        let buffer_changed = buffer != u32::MAX && buffer != buffer_ms;
+        if buffer_changed {
+            buffer_ms = buffer;
+        }
+        if resize.is_some() || buffer_changed {
+            let (nw, nh, f) = match resize {
+                Some((w, h, f)) => { let (nw, nh) = fit(w, h); (nw, nh, f) }
+                None => (ow, oh, fps),
+            };
+            if (nw, nh, f) != (ow, oh, fps) || buffer_changed {
                 let codec = encoder.codec;
                 converter.lock().unwrap().0 = None;
                 while rx.try_recv().is_ok() {}
@@ -481,14 +499,14 @@ fn run() -> windows::core::Result<()> {
                 *free.lock().unwrap() = (0..RING).collect();
                 encoder.finish();
                 copy_mode = copy_ok(codec, nw, nh);
-                match Encoder::new(&gpu, codec, nw, nh, f, commanded, copy_mode)? {
+                match Encoder::new(&gpu, codec, nw, nh, f, commanded, copy_mode, buffer_ms)? {
                     Some(e) => encoder = e,
                     None => return Err(windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32), "encoder lost on resize")),
                 }
                 converter.lock().unwrap().0 = Some(if copy_mode { convert::Converter::copier(&gpu, nw, nh, RING)? } else { convert::Converter::new(&gpu, cw, ch, nw, nh, RING)? });
                 interval.store(10_000_000 / f as i64, Ordering::Relaxed);
                 (ow, oh, fps) = (nw, nh, f);
-                event(format!("{{\"event\":\"resized\",\"width\":{},\"height\":{},\"fps\":{},\"copy\":{}}}", ow, oh, fps, copy_mode));
+                event(format!("{{\"event\":\"resized\",\"width\":{},\"height\":{},\"fps\":{},\"copy\":{},\"bufferMs\":{}}}", ow, oh, fps, copy_mode, buffer_ms));
             }
         }
         if encoder.wants_input() {

@@ -30,6 +30,7 @@ const SETTINGS_DEFAULTS = {
   adaptive: true,       // smart streaming: start where this computer can, step down when it struggles
   engine: true,         // native capture + hardware encoder for screen shares, when everyone can show it
   enhance: true,        // sharpen native streams (and upscale them to the screen) on this computer's GPU
+  streamDelay: '1500',  // ms native streams I watch run behind live, for a smoother, sharper picture ('0' = live)
   // While you share a whole screen, leave Miserecord's window out of the capture
   // (no endless mirror). Windows then also leaves it out of screenshots.
   hideFromShare: true,
@@ -484,6 +485,7 @@ function initSettings() {
   bindSwitch('#sAdaptive', 'adaptive');
   bindSwitch('#sEngine', 'engine');
   bindSwitch('#sEnhance', 'enhance');
+  bindSelect('#sStreamDelay', 'streamDelay');
   bindSwitch('#sHideFromShare', 'hideFromShare');
   const codecs = supportedVideoCodecs();
   $('#sCodec').innerHTML = '';
@@ -548,6 +550,7 @@ function openSettings() {
   $('#sAdaptive').checked = settings.adaptive;
   $('#sEngine').checked = settings.engine;
   $('#sEnhance').checked = settings.enhance;
+  $('#sStreamDelay').value = settings.streamDelay;
   $('#sHideFromShare').checked = settings.hideFromShare;
   $('#sHideRow').hidden = !window.miserecordDesktop;
   $('#sEngine').closest('.row').hidden = !(Native.caps && (Native.caps.codecs || []).length);

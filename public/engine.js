@@ -97,7 +97,7 @@ const Engine = (() => {
   //   config: { id (MediaStream id), codec, width, height }
   //   sendTo(peer, json): the call's normal channel
   //   setRate(bps), wantKey(): back to the encoder
-  function createFanout({ number = 1, config, startRate, maxRate, minRate = 500e3, sendTo, setRate, wantKey }) {
+  function createFanout({ number = 1, config, startRate, maxRate, minRate = 500e3, sendTo, setRate, wantKey, onDelay = () => {} }) {
     const viewers = new Map(); // peer id -> { peer, dc, rate, needKey, frames }
     let frameNo = 0;
     let rate = startRate;
@@ -115,13 +115,23 @@ const Engine = (() => {
 
     function addViewer(peer, dc) {
       if (viewers.has(peer.id)) return;
-      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true, queue: [], queued: 0, sentWin: 0, lastBuffered: 0, lastBacklog: 0, tput: 0, calm: 0, full: 0 });
+      viewers.set(peer.id, { peer, dc, rate: startRate, needKey: true, queue: [], queued: 0, sentWin: 0, lastBuffered: 0, lastBacklog: 0, tput: 0, calm: 0, full: 0, delay: 0 });
+      delayChanged();
       sendTo(peer, { type: 'engine-config', stream: number, ...config });
       askKey(); // a new viewer can only start on a keyframe
     }
 
     function removeViewer(id) {
       viewers.delete(id);
+      delayChanged();
+    }
+
+    // The encoder's buffer follows the least delayed viewer (a live viewer can't
+    // wait for bursts).
+    let lastDelay = 0;
+    function delayChanged() {
+      const d = viewers.size ? Math.min(...[...viewers.values()].map((x) => x.delay)) : 0;
+      if (d !== lastDelay) { lastDelay = d; onDelay(d); }
     }
 
     // Pacing: a keyframe is a few hundred kilobytes; sent in one go it overflows
@@ -163,7 +173,7 @@ const Engine = (() => {
         if (v.dc.readyState !== 'open') continue;
         // A viewer whose line is full (queued here or in the channel) skips frames
         // until the next keyframe, instead of falling further behind.
-        if (v.queued + v.dc.bufferedAmount > 2 * 1024 * 1024) { v.needKey = true; st.skipped++; askKey(); continue; }
+        if (v.queued + v.dc.bufferedAmount > skipAt(v)) { v.needKey = true; st.skipped++; askKey(); continue; }
         if (v.needKey && !frame.key) continue;
         v.needKey = false;
         built ||= packets(number, frameNo, frame.key, frame.time, data);
@@ -192,6 +202,11 @@ const Engine = (() => {
     // windows in a row (one keyframe alone doesn't count) means the line is full:
     // go just under its speed. With little waiting for 2 s, probe 8% higher.
     const WINDOW = 250;
+    // A viewer with a stream delay holds frames back anyway: data waiting here up
+    // to half that delay isn't a full line, just a burst being spread out, and
+    // only a backlog worth the whole delay is skipped.
+    const fullAt = (v) => Math.max(256 * 1024, (v.rate / 8) * (v.delay / 2000));
+    const skipAt = (v) => Math.max(2 * 1024 * 1024, (v.rate / 8) * (v.delay / 1000));
     const cc = setInterval(() => {
       for (const v of viewers.values()) {
         const buffered = v.dc.bufferedAmount;
@@ -208,7 +223,7 @@ const Engine = (() => {
         v.lastBuffered = buffered;
         v.lastBacklog = backlog;
         v.sentWin = 0;
-        v.full = backlog > 256 * 1024 ? (v.full || 0) + 1 : 0;
+        v.full = backlog > fullAt(v) ? (v.full || 0) + 1 : 0;
         if (v.full >= 2) {
           const target = v.tput ? v.tput * 0.85 : v.rate * 0.85;
           if (v.rate > target) v.rate = Math.max(minRate, v.tput ? v.tput * 0.7 : minRate, target);
@@ -225,6 +240,7 @@ const Engine = (() => {
       const v = viewers.get(peer.id);
       if (!v) return;
       if (msg.type === 'engine-keyframe') { v.needKey = true; askKey(); }
+      if (msg.type === 'engine-delay') { v.delay = Math.max(0, Math.min(3000, msg.ms | 0)); delayChanged(); }
       if (msg.type !== 'engine-feedback') return;
       // The viewer's decoder falling behind is a reason to slow down too.
       if (msg.queue > 3) { v.rate = Math.max(minRate, v.rate * 0.85); applyRate(); }
@@ -340,10 +356,11 @@ const Engine = (() => {
       let s = streams.get(number);
       if (!s) {
         const generator = new MediaStreamTrackGenerator({ kind: 'video' });
-        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), ready: new Map(), next: null, waitSince: 0, needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now(), queue: [], timer: null, target: 50 };
+        s = { number, generator, writer: generator.writable.getWriter(), decoder: null, config: null, parts: new Map(), ready: new Map(), next: null, waitSince: 0, held: [], holdTimer: null, delay: viewDelay, arrBest: Infinity, arrRecent: Infinity, arrAt: performance.now(), needKey: true, lastKeyAsk: 0, best: Infinity, recentBest: Infinity, bestAt: performance.now(), queue: [], timer: null, target: 50 };
         streams.set(number, s);
         s.config = msg;
         onTrack(generator, msg);
+        if (viewDelay) send({ type: 'engine-delay', stream: number, ms: viewDelay });
       }
       const sameCodec = s.config && s.config.codec === msg.codec && s.decoder && s.decoder.state === 'configured';
       s.config = msg;
@@ -406,6 +423,12 @@ const Engine = (() => {
     // For a given viewer the sender only leaves out frames right before a
     // keyframe, so a gap in front of a normal frame always means "still coming".
     function arrived(s, no, f) {
+      // How fast frames get here at best (the clocks differ, but by a constant).
+      const now = performance.now();
+      const d = now - f.timestamp / 1000;
+      if (now - s.arrAt > 3000) { s.arrBest = s.arrRecent; s.arrRecent = Infinity; s.arrAt = now; }
+      s.arrRecent = Math.min(s.arrRecent, d);
+      s.arrBest = Math.min(s.arrBest, d);
       if (f.key && (s.next === null || no >= s.next)) {
         // A keyframe needs nothing before it: start over from here.
         for (const k of s.ready.keys()) if (k < no) s.ready.delete(k);
@@ -437,7 +460,26 @@ const Engine = (() => {
       s.waitSince = s.ready.size ? performance.now() : 0;
     }
 
+    // Stream delay (settings): frames wait here, still compressed, until shortly
+    // before they're due, so a slow moment on the line, a resend or a big frame
+    // is absorbed by the buffer instead of freezing the picture, and the sender
+    // can spend bits unevenly where the picture needs them.
+    const LEAD = 100; // ms before showing: time to decode
     function decode(s, f) {
+      if (!s.delay) { decodeNow(s, f); return; }
+      s.held.push({ f, release: f.timestamp / 1000 + s.arrBest + s.delay - LEAD });
+      release(s);
+    }
+
+    function release(s) {
+      clearTimeout(s.holdTimer);
+      s.holdTimer = null;
+      const now = performance.now();
+      while (s.held.length && (!s.delay || s.held[0].release <= now + 1)) decodeNow(s, s.held.shift().f);
+      if (s.held.length) s.holdTimer = setTimeout(() => release(s), Math.max(1, s.held[0].release - now));
+    }
+
+    function decodeNow(s, f) {
       const size = f.chunks.reduce((n, c) => n + c.byteLength, 0);
       const data = new Uint8Array(size);
       let o = 0;
@@ -454,6 +496,8 @@ const Engine = (() => {
       s.waitSince = 0;
       s.ready.clear();
       s.parts.clear();
+      s.held = [];
+      clearTimeout(s.holdTimer);
     }
 
     const feedback = setInterval(() => {
@@ -506,6 +550,7 @@ const Engine = (() => {
       if (!s) return;
       streams.delete(number);
       clearTimeout(s.timer);
+      clearTimeout(s.holdTimer);
       for (const item of s.queue || []) item.frame.close();
       if (s.decoder && s.decoder.state !== 'closed') s.decoder.close();
       s.writer.close().catch(() => {});
@@ -529,11 +574,25 @@ const Engine = (() => {
       if (s) s.target = Math.max(30, Math.min(400, ms));
     }
 
-    function streamsInfo() {
-      return [...streams.values()].map((s) => ({ number: s.number, id: s.config && String(s.config.id), target: s.target }));
+    // Extra delay for quality (ms, 0 = live), for every stream; the sender is told
+    // so it can use the room.
+    let viewDelay = 0;
+    function setDelay(ms) {
+      ms = Math.max(0, Math.min(3000, ms | 0));
+      if (ms === viewDelay) return;
+      viewDelay = ms;
+      for (const s of streams.values()) {
+        s.delay = ms;
+        release(s);
+        send({ type: 'engine-delay', stream: s.number, ms });
+      }
     }
 
-    return { onControl, stop, setTargetDelay, streamsInfo, stats: () => ({ ...st, ...total }) };
+    function streamsInfo() {
+      return [...streams.values()].map((s) => ({ number: s.number, id: s.config && String(s.config.id), target: s.target, delay: s.delay }));
+    }
+
+    return { onControl, stop, setTargetDelay, setDelay, streamsInfo, stats: () => ({ ...st, ...total }) };
   }
 
   return { channel, decodable, createFanout, createSender, createReceiver, CODECS };
