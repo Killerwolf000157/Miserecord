@@ -206,6 +206,10 @@ const Native = {
     const fps = LEVELS[this.level].fps;
     const need = LEVELS[this.level].mbps * 1e6;
     const starved = rate < need * 0.6;
+    // A viewer's computer can't decode this size this fast (its decoder has
+    // been behind for 3 s): a smaller size or frame rate helps it, a lower
+    // bitrate doesn't.
+    const viewerSlow = this.fanout.slowDecoders() > 0;
     // Behind only when the helper really skipped frames because every texture was
     // still waiting on the graphics card (busyDrops), two seconds running: a gap
     // between captured and encoded counts alone also happens for a second after
@@ -215,18 +219,18 @@ const Native = {
     const settled = now - this.changedAt > 2000;
     this.busySecs = busy && settled ? (this.busySecs || 0) + 1 : 0;
     const slowEncoder = this.busySecs >= 2;
-    this.diagnosis = starved ? 'bandwidth' : slowEncoder ? 'gpu' : ev.encodeFps >= fps * 0.85 ? 'ok' : 'still';
+    this.diagnosis = starved ? 'bandwidth' : slowEncoder ? 'gpu' : viewerSlow ? 'viewer' : ev.encodeFps >= fps * 0.85 ? 'ok' : 'still';
     this.bad = starved ? this.bad + 1 : 0;
-    this.slow = slowEncoder ? this.slow + 1 : 0;
+    this.slow = slowEncoder || viewerSlow ? this.slow + 1 : 0;
     const roomUp = this.level > this.ceiling && rate >= LEVELS[this.level - 1].mbps * 1e6 * 1.25;
-    this.good = !starved && !slowEncoder && roomUp ? this.good + 1 : 0;
+    this.good = !starved && !slowEncoder && !viewerSlow && roomUp ? this.good + 1 : 0;
     if (now - this.changedAt < 6000) return;
     // Viewers a second or more behind absorb dips in their buffer: give the line
     // longer before giving up resolution.
     const patience = (this.bufferMs || 0) >= 1000 ? 6 : 3;
     if ((this.bad >= patience || this.slow >= 4) && this.level < LEVELS.length - 1) {
       if (this.upAt && now - this.upAt < 20000) this.holdUp = true;
-      this.setLevel(this.level + 1, this.bad >= patience ? `only ${(rate / 1e6).toFixed(1)} Mbps gets through` : 'the graphics card is busy');
+      this.setLevel(this.level + 1, this.bad >= patience ? `only ${(rate / 1e6).toFixed(1)} Mbps gets through` : viewerSlow ? "a viewer's computer can't decode it this fast" : 'the graphics card is busy');
     } else if (this.good >= 15 && !this.holdUp) {
       this.upAt = now;
       this.setLevel(this.level - 1, 'room for more');

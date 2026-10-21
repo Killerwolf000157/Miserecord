@@ -216,6 +216,7 @@ const DIAGNOSIS = {
   capture: 'Windows is handing over few frames: the game is probably using the whole graphics card',
   encoder: "The encoder can't keep up",
   gpu: 'The graphics card is fully busy (usually the game), so some frames are skipped',
+  viewer: "A viewer's computer can't decode this size this fast, so the stream got smaller",
   bandwidth: "The sender's upload is too slow for this size",
 };
 
@@ -316,6 +317,7 @@ function onStreamStats(peer, msg) {
     gpu: s.gpu === true, auto: s.auto === true,
     level: /^\d{3,4}p \d{2} fps$/.test(s.level) ? s.level : '',
     diagnosis: DIAGNOSIS[s.diagnosis] ? s.diagnosis : 'ok',
+    // (a diagnosis an older or newer app doesn't know shows as "ok")
     engine: typeof s.engine === 'string' ? s.engine.replace(/[<>&"]/g, '').slice(0, 120) : '',
   };
 }

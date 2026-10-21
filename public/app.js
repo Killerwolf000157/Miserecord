@@ -1633,6 +1633,15 @@ function toggleMute() {
 
 async function toggleScreen() {
   if (state.screen) return stopLocal('screen');
+  // Pressed again while a share is starting (the picker is open, or the
+  // native engine is getting ready): a second picker opened, and closing it
+  // ended the first share.
+  if (state.screenStarting) return;
+  state.screenStarting = true;
+  try { await startScreen(); } finally { state.screenStarting = false; }
+}
+
+async function startScreen() {
   let stream;
   state.pickerCancelled = false;
   try {

@@ -329,8 +329,12 @@ const Engine = (() => {
       if (msg.type === 'engine-keyframe') { v.needKey = true; askKey(v.layer); }
       if (msg.type === 'engine-delay') { v.delay = Math.max(0, Math.min(3000, msg.ms | 0)); delayChanged(); }
       if (msg.type !== 'engine-feedback') return;
-      // The viewer's decoder falling behind is a reason to slow down too.
-      if (msg.queue > 3) { v.rate = Math.max(minRate, v.rate * 0.85); applyRate(); }
+      // The viewer's decoder falling behind used to cut the bitrate 15% at every
+      // report (twice a second, no floor): a laptop busy with a game took a 21 Mbps
+      // stream to 0.5 in 15 s, and the ladder then took that for a bad line. A
+      // lower bitrate barely helps a decoder; a smaller size or frame rate does,
+      // so it's only noted here and the ladder (Native.adapt) steps down for it.
+      v.decodeBehind = msg.queue > 3 ? (v.decodeBehind || 0) + 1 : 0;
     }
 
     // A new picture size or frame rate from the encoder: tell every viewer.
@@ -351,6 +355,8 @@ const Engine = (() => {
 
     // Lanes open per viewer, for the log.
     const lanesNow = () => [...viewers.values()].map((v) => lanesOpen(v));
+    // Viewers on the main layer whose decoder has been behind for 3 s (6 reports).
+    const slowDecoders = () => [...viewers.values()].filter((v) => !v.paused && v.layer === 0 && (v.decodeBehind || 0) >= 6).length;
     // One viewer's numbers, for them and the log (Native sends them each second):
     // the rate for them, what their line drained when full, lanes, what waits per
     // lane, rate cuts and probes since last time, and their layer.
@@ -361,12 +367,12 @@ const Engine = (() => {
         rate: +(v.rate / 1e6).toFixed(2), tput: +((v.tput || 0) / 1e6).toFixed(2), lanes: lanesOpen(v),
         waitingKB: v.lanes.map((d) => (d.readyState === 'open' ? Math.round(d.bufferedAmount / 1024) : -1)),
         queuedKB: Math.round(v.queued / 1024), cuts: v.cuts || 0, probes: v.probes || 0,
-        layer: v.layer, paused: !!v.paused, delay: v.delay,
+        layer: v.layer, paused: !!v.paused, delay: v.delay, decodeBehind: v.decodeBehind || 0,
       };
       v.cuts = 0; v.probes = 0;
       return out;
     }
-    return { lanesNow, viewerNet, addViewer, addLane, removeViewer, setView, setLayer, setLowWant, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
+    return { lanesNow, viewerNet, slowDecoders, addViewer, addLane, removeViewer, setView, setLayer, setLowWant, push, onControl, reconfigure, stop, backlog, stats: () => ({ ...st, rate: Math.round(rate), viewers: viewers.size, sinceKeyMs: Math.round(performance.now() - lastKeyAt) }) };
   }
 
   // ---------------------------------------------------------------- WebCodecs sender (tests)
